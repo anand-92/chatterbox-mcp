@@ -22,6 +22,8 @@ from typing import Optional, Literal, List
 
 import torch
 import torchaudio as ta
+import numpy as np
+from scipy.io import wavfile
 from fastmcp import FastMCP
 
 # CUDA optimizations for RTX 5090
@@ -262,11 +264,14 @@ def get_model_pool():
 
 
 def save_audio_to_bytes(wav_tensor: torch.Tensor, sample_rate: int) -> bytes:
-    """Convert audio tensor to WAV bytes."""
-    # Use temp file instead of BytesIO (FFmpeg backend doesn't support BytesIO)
+    """Convert audio tensor to WAV bytes using scipy (avoids torchaudio FFmpeg issues)."""
     temp_path = tempfile.mktemp(suffix=".wav")
     try:
-        ta.save(temp_path, wav_tensor, sample_rate)
+        # Convert to numpy and ensure correct shape for scipy
+        audio_np = wav_tensor.squeeze().cpu().numpy()
+        # Convert float32 [-1, 1] to int16 for WAV
+        audio_int16 = (audio_np * 32767).astype(np.int16)
+        wavfile.write(temp_path, sample_rate, audio_int16)
         with open(temp_path, "rb") as f:
             return f.read()
     finally:
