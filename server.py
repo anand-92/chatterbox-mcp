@@ -140,8 +140,14 @@ When user wants voice cloning:
 """
 )
 
-# Global model cache
+# Global model cache (single instance for non-batch use)
 _models = {}
+
+# Model pool for concurrent batch processing (each thread gets its own model)
+import threading
+from queue import Queue
+_model_pool = None
+_pool_size = 4  # 4 instances * ~5GB = ~20GB VRAM, fits in 32GB
 
 # Local cache paths for models (avoids HuggingFace auth)
 LOCAL_MODEL_PATHS = {
@@ -174,6 +180,28 @@ def get_model(model_type: str = "standard"):
         print(f"{model_type} model loaded successfully!")
 
     return _models[model_type]
+
+
+def get_model_pool():
+    """Get or initialize the model pool for concurrent batch processing."""
+    global _model_pool
+    if _model_pool is None:
+        from chatterbox.tts import ChatterboxTTS
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        local_path = LOCAL_MODEL_PATHS.get("standard")
+
+        print(f"Initializing model pool with {_pool_size} instances...")
+        _model_pool = Queue()
+        for i in range(_pool_size):
+            print(f"  Loading model instance {i+1}/{_pool_size}...")
+            if local_path:
+                model = ChatterboxTTS.from_local(local_path, device=device)
+            else:
+                model = ChatterboxTTS.from_pretrained(device=device)
+            _model_pool.put(model)
+        print(f"Model pool ready with {_pool_size} instances!")
+
+    return _model_pool
 
 
 def save_audio_to_bytes(wav_tensor: torch.Tensor, sample_rate: int) -> bytes:
@@ -403,52 +431,59 @@ def text_to_speech(
             os.unlink(temp_file.name)
 
 
-def _generate_single(item: dict, tts_model, sample_rate: int) -> dict:
-    """Internal function to generate a single TTS clip for batch processing."""
-    text = item.get("text", "")
-    voice_name = item.get("voice_name")
-    exaggeration = item.get("exaggeration", 0.5)
-    cfg_weight = item.get("cfg_weight", 0.5)
+def _generate_single_pooled(item: dict, model_pool: Queue, sample_rate: int) -> dict:
+    """Internal function to generate a single TTS clip using a model from the pool."""
+    # Acquire a model from the pool (blocks if none available)
+    tts_model = model_pool.get()
 
-    audio_prompt_path = None
-    if voice_name:
-        voice_file = VOICES_DIR / f"{voice_name}.wav"
-        if voice_file.exists():
-            audio_prompt_path = str(voice_file)
+    try:
+        text = item.get("text", "")
+        voice_name = item.get("voice_name")
+        exaggeration = item.get("exaggeration", 0.5)
+        cfg_weight = item.get("cfg_weight", 0.5)
 
-    kwargs = {
-        "exaggeration": exaggeration,
-        "cfg_weight": cfg_weight,
-    }
-    if audio_prompt_path:
-        kwargs["audio_prompt_path"] = audio_prompt_path
+        audio_prompt_path = None
+        if voice_name:
+            voice_file = VOICES_DIR / f"{voice_name}.wav"
+            if voice_file.exists():
+                audio_prompt_path = str(voice_file)
 
-    # Generate audio
-    chunks = split_text_into_chunks(text)
-    audio_tensors = []
-    for chunk in chunks:
-        wav = tts_model.generate(chunk, **kwargs)
-        audio_tensors.append(wav)
+        kwargs = {
+            "exaggeration": exaggeration,
+            "cfg_weight": cfg_weight,
+        }
+        if audio_prompt_path:
+            kwargs["audio_prompt_path"] = audio_prompt_path
 
-    if len(audio_tensors) > 1:
-        final_wav = concatenate_audio_tensors(audio_tensors, sample_rate)
-    else:
-        final_wav = audio_tensors[0]
+        # Generate audio
+        chunks = split_text_into_chunks(text)
+        audio_tensors = []
+        for chunk in chunks:
+            wav = tts_model.generate(chunk, **kwargs)
+            audio_tensors.append(wav)
 
-    audio_bytes = save_audio_to_bytes(final_wav, sample_rate)
+        if len(audio_tensors) > 1:
+            final_wav = concatenate_audio_tensors(audio_tensors, sample_rate)
+        else:
+            final_wav = audio_tensors[0]
 
-    # Save to file
-    timestamp = int(time.time() * 1000)  # Use milliseconds for uniqueness
-    filename = f"tts_{timestamp}.wav"
-    output_file = OUTPUT_DIR / filename
-    with open(output_file, "wb") as f:
-        f.write(audio_bytes)
+        audio_bytes = save_audio_to_bytes(final_wav, sample_rate)
 
-    return {
-        "filename": filename,
-        "download_url": f"http://192.168.1.5:8765/download/{filename}",
-        "size_bytes": len(audio_bytes),
-    }
+        # Save to file
+        timestamp = int(time.time() * 1000)  # Use milliseconds for uniqueness
+        filename = f"tts_{timestamp}.wav"
+        output_file = OUTPUT_DIR / filename
+        with open(output_file, "wb") as f:
+            f.write(audio_bytes)
+
+        return {
+            "filename": filename,
+            "download_url": f"http://192.168.1.5:8765/download/{filename}",
+            "size_bytes": len(audio_bytes),
+        }
+    finally:
+        # Always return the model to the pool
+        model_pool.put(tts_model)
 
 
 @mcp.tool
@@ -478,23 +513,25 @@ def batch_text_to_speech(
     if not items:
         return {"status": "error", "message": "No items provided"}
 
-    tts_model = get_model("standard")
-    sample_rate = tts_model.sr
+    # Initialize model pool (loads multiple model instances on first use)
+    model_pool = get_model_pool()
+
+    # Get sample rate from one of the models
+    temp_model = model_pool.get()
+    sample_rate = temp_model.sr
+    model_pool.put(temp_model)
 
     results = []
     errors = []
 
-    # Process items concurrently
-    # Note: PyTorch/CUDA can handle concurrent inference on same GPU
-    # 6 workers balances GPU compute vs PCIe bus bandwidth
-    # (8 workers saturates bus interface before GPU compute is fully utilized)
-    max_workers = min(len(items), 6)
+    # Use pool size as max workers (each worker gets its own model)
+    max_workers = min(len(items), _pool_size)
 
-    print(f"Batch processing {len(items)} items with {max_workers} workers...")
+    print(f"Batch processing {len(items)} items with {max_workers} workers (pool of {_pool_size} models)...")
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_idx = {
-            executor.submit(_generate_single, item, tts_model, sample_rate): idx
+            executor.submit(_generate_single_pooled, item, model_pool, sample_rate): idx
             for idx, item in enumerate(items)
         }
 
