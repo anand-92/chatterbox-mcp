@@ -486,8 +486,9 @@ def batch_text_to_speech(
 
     # Process items concurrently
     # Note: PyTorch/CUDA can handle concurrent inference on same GPU
-    # RTX 5090 has plenty of headroom - model only uses ~5GB VRAM
-    max_workers = min(len(items), 8)  # Increased for high-VRAM GPUs
+    # 6 workers balances GPU compute vs PCIe bus bandwidth
+    # (8 workers saturates bus interface before GPU compute is fully utilized)
+    max_workers = min(len(items), 6)
 
     print(f"Batch processing {len(items)} items with {max_workers} workers...")
 
