@@ -431,25 +431,24 @@ def list_voices() -> dict:
 def save_voice(
     name: str = Field(description="Name for the voice (will be saved as name.wav)"),
     audio_url: Optional[str] = Field(default=None, description="URL to download the voice audio from"),
-    audio_base64: Optional[str] = Field(default=None, description="Base64-encoded WAV audio"),
 ) -> dict:
     """
     Save a voice reference audio for later use in voice cloning.
 
-    Provide either audio_url OR audio_base64 (not both).
+    For best performance, use the HTTP upload endpoint instead:
+        curl -X POST "http://192.168.1.5:8765/upload_voice/name" -F "file=@audio.wav"
+
+    Or provide audio_url to download from a URL.
     The audio should be 5-15 seconds of clear speech.
 
     Examples:
     - save_voice(name="david", audio_url="http://example.com/voice.wav")
-    - save_voice(name="sarah", audio_base64="<base64 data>")
+    - Or use curl: curl -X POST "http://192.168.1.5:8765/upload_voice/david" -F "file=@voice.wav"
     """
     import urllib.request
 
-    if not audio_url and not audio_base64:
-        raise ValueError("Must provide either audio_url or audio_base64")
-
-    if audio_url and audio_base64:
-        raise ValueError("Provide only one of audio_url or audio_base64, not both")
+    if not audio_url:
+        raise ValueError("Must provide audio_url, or use the HTTP upload endpoint: curl -X POST 'http://192.168.1.5:8765/upload_voice/name' -F 'file=@audio.wav'")
 
     # Sanitize name
     safe_name = "".join(c for c in name if c.isalnum() or c in "-_").lower()
@@ -458,14 +457,8 @@ def save_voice(
 
     output_path = VOICES_DIR / f"{safe_name}.wav"
 
-    if audio_url:
-        print(f"Downloading voice from {audio_url}...")
-        urllib.request.urlretrieve(audio_url, output_path)
-    else:
-        print(f"Saving voice from base64...")
-        audio_bytes = base64.b64decode(audio_base64)
-        with open(output_path, "wb") as f:
-            f.write(audio_bytes)
+    print(f"Downloading voice from {audio_url}...")
+    urllib.request.urlretrieve(audio_url, output_path)
 
     stat = output_path.stat()
     return {
@@ -640,11 +633,43 @@ if __name__ == "__main__":
         from starlette.responses import JSONResponse
         return JSONResponse({"error": "File not found"}, status_code=404)
 
+    # Add upload endpoint for voice cloning (much faster than base64 through MCP)
+    async def upload_voice(request):
+        from starlette.responses import JSONResponse
+        voice_name = request.path_params["voice_name"]
+
+        # Sanitize name
+        safe_name = "".join(c for c in voice_name if c.isalnum() or c in "-_").lower()
+        if not safe_name:
+            return JSONResponse({"error": "Invalid voice name"}, status_code=400)
+
+        # Parse multipart form data
+        form = await request.form()
+        uploaded_file = form.get("file")
+        if not uploaded_file:
+            return JSONResponse({"error": "No file uploaded. Use: curl -X POST 'url' -F 'file=@audio.wav'"}, status_code=400)
+
+        # Save the file
+        output_path = VOICES_DIR / f"{safe_name}.wav"
+        contents = await uploaded_file.read()
+        with open(output_path, "wb") as f:
+            f.write(contents)
+
+        print(f"Voice '{safe_name}' uploaded: {len(contents)} bytes")
+        return JSONResponse({
+            "status": "success",
+            "voice_name": safe_name,
+            "size_bytes": len(contents),
+            "usage": f"text_to_speech(text='Your text', voice_name='{safe_name}')"
+        })
+
     # Get the underlying Starlette app and add our route
     from starlette.routing import Route
     download_route = Route("/download/{filename}", download_audio)
+    upload_route = Route("/upload_voice/{voice_name}", upload_voice, methods=["POST"])
 
     print(f"Download URL: http://{local_ip}:8765/download/<filename>")
+    print(f"Upload URL:   curl -X POST 'http://{local_ip}:8765/upload_voice/<name>' -F 'file=@audio.wav'")
     print("=" * 60)
 
     # Run server on all interfaces so it's accessible from other machines
@@ -653,12 +678,13 @@ if __name__ == "__main__":
     from starlette.applications import Starlette
     from starlette.routing import Mount
 
-    # Create a custom app that includes both MCP and download routes
+    # Create a custom app that includes MCP, download, and upload routes
     # IMPORTANT: Must pass lifespan from MCP app for proper initialization
     mcp_http_app = mcp.http_app()
     app = Starlette(
         routes=[
             download_route,
+            upload_route,
             Mount("/", app=mcp_http_app),
         ],
         lifespan=mcp_http_app.lifespan,
