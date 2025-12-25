@@ -147,7 +147,7 @@ _models = {}
 import threading
 from queue import Queue
 _model_pool = None
-_pool_size = 4  # 4 instances * ~5GB = ~20GB VRAM, fits in 32GB
+_pool_size = 3  # 3 instances - balances parallelism vs PCIe bus bandwidth
 
 # Local cache paths for models (avoids HuggingFace auth)
 LOCAL_MODEL_PATHS = {
