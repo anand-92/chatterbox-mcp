@@ -510,9 +510,19 @@ def clone_voice_from_youtube(
     import subprocess
     import shutil
 
-    # Check for required tools
+    # Check for required tools (with Windows-specific fallback paths)
     yt_dlp = shutil.which("yt-dlp")
     ffmpeg = shutil.which("ffmpeg")
+
+    # Windows fallback paths
+    if not yt_dlp:
+        win_yt_dlp = Path(os.path.expanduser("~")) / "AppData/Local/Packages/PythonSoftwareFoundation.Python.3.12_qbz5n2kfra8p0/LocalCache/local-packages/Python312/Scripts/yt-dlp.exe"
+        if win_yt_dlp.exists():
+            yt_dlp = str(win_yt_dlp)
+    if not ffmpeg:
+        win_ffmpeg = Path(os.path.expanduser("~")) / "AppData/Local/Microsoft/WinGet/Links/ffmpeg.exe"
+        if win_ffmpeg.exists():
+            ffmpeg = str(win_ffmpeg)
 
     if not yt_dlp:
         raise ValueError("yt-dlp not found. Install with: pip install yt-dlp")
