@@ -403,6 +403,123 @@ def text_to_speech(
             os.unlink(temp_file.name)
 
 
+def _generate_single(item: dict, tts_model, sample_rate: int) -> dict:
+    """Internal function to generate a single TTS clip for batch processing."""
+    text = item.get("text", "")
+    voice_name = item.get("voice_name")
+    exaggeration = item.get("exaggeration", 0.5)
+    cfg_weight = item.get("cfg_weight", 0.5)
+
+    audio_prompt_path = None
+    if voice_name:
+        voice_file = VOICES_DIR / f"{voice_name}.wav"
+        if voice_file.exists():
+            audio_prompt_path = str(voice_file)
+
+    kwargs = {
+        "exaggeration": exaggeration,
+        "cfg_weight": cfg_weight,
+    }
+    if audio_prompt_path:
+        kwargs["audio_prompt_path"] = audio_prompt_path
+
+    # Generate audio
+    chunks = split_text_into_chunks(text)
+    audio_tensors = []
+    for chunk in chunks:
+        wav = tts_model.generate(chunk, **kwargs)
+        audio_tensors.append(wav)
+
+    if len(audio_tensors) > 1:
+        final_wav = concatenate_audio_tensors(audio_tensors, sample_rate)
+    else:
+        final_wav = audio_tensors[0]
+
+    audio_bytes = save_audio_to_bytes(final_wav, sample_rate)
+
+    # Save to file
+    timestamp = int(time.time() * 1000)  # Use milliseconds for uniqueness
+    filename = f"tts_{timestamp}.wav"
+    output_file = OUTPUT_DIR / filename
+    with open(output_file, "wb") as f:
+        f.write(audio_bytes)
+
+    return {
+        "filename": filename,
+        "download_url": f"http://192.168.1.5:8765/download/{filename}",
+        "size_bytes": len(audio_bytes),
+    }
+
+
+@mcp.tool
+def batch_text_to_speech(
+    items: List[dict] = Field(description="List of TTS items. Each item should have: text (required), voice_name (optional), exaggeration (optional, default 0.5), cfg_weight (optional, default 0.5)")
+) -> dict:
+    """
+    Generate multiple TTS clips in parallel for faster batch processing.
+
+    Perfect for conversations or multiple clips. Uses concurrent processing
+    to maximize GPU utilization on high-VRAM cards like RTX 5090.
+
+    Each item in the list should be a dict with:
+    - text: The text to speak (required)
+    - voice_name: Name of voice to use (optional)
+    - exaggeration: 0.0-1.0 (optional, default 0.5)
+    - cfg_weight: 0.0-1.0 (optional, default 0.5)
+
+    Example:
+    batch_text_to_speech(items=[
+        {"text": "Hello from Trump", "voice_name": "trump", "exaggeration": 0.85},
+        {"text": "Hello from Elon", "voice_name": "elon", "exaggeration": 0.75}
+    ])
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    if not items:
+        return {"status": "error", "message": "No items provided"}
+
+    tts_model = get_model("standard")
+    sample_rate = tts_model.sr
+
+    results = []
+    errors = []
+
+    # Process items concurrently
+    # Note: PyTorch/CUDA can handle concurrent inference on same GPU
+    max_workers = min(len(items), 4)  # Limit concurrent workers
+
+    print(f"Batch processing {len(items)} items with {max_workers} workers...")
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_idx = {
+            executor.submit(_generate_single, item, tts_model, sample_rate): idx
+            for idx, item in enumerate(items)
+        }
+
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            try:
+                result = future.result()
+                result["index"] = idx
+                results.append(result)
+                print(f"  Completed item {idx + 1}/{len(items)}")
+            except Exception as e:
+                errors.append({"index": idx, "error": str(e)})
+                print(f"  Error on item {idx + 1}: {e}")
+
+    # Sort results by original index
+    results.sort(key=lambda x: x["index"])
+
+    return {
+        "status": "success",
+        "total": len(items),
+        "completed": len(results),
+        "failed": len(errors),
+        "results": results,
+        "errors": errors if errors else None
+    }
+
+
 @mcp.tool
 def list_voices() -> dict:
     """
