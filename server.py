@@ -23,6 +23,15 @@ from typing import Optional, Literal, List
 import torch
 import torchaudio as ta
 from fastmcp import FastMCP
+
+# CUDA optimizations for RTX 5090
+if torch.cuda.is_available():
+    # Enable TF32 for faster matrix multiplies (minimal precision loss)
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    # Use faster cuDNN algorithms
+    torch.backends.cudnn.benchmark = True
+    print(f"CUDA optimizations enabled for {torch.cuda.get_device_name(0)}")
 from fastmcp.utilities.types import Audio
 from pydantic import Field
 from starlette.responses import FileResponse
@@ -147,7 +156,24 @@ _models = {}
 import threading
 from queue import Queue
 _model_pool = None
-_pool_size = 3  # 3 instances - balances parallelism vs PCIe bus bandwidth
+_pool_size = 4  # 4 instances - with caching + no watermark, PCIe should be fine
+
+# Voice conditionals cache - avoids expensive CPU librosa preprocessing for each generation
+# Key: (voice_path, mtime) -> Value: Conditionals object (GPU tensors)
+_voice_conds_cache = {}
+_voice_cache_lock = threading.Lock()
+
+
+class NoOpWatermarker:
+    """Dummy watermarker that skips CPU-intensive watermarking."""
+    def apply_watermark(self, wav, sample_rate):
+        return wav  # Pass through unchanged
+
+
+def _disable_watermarker(model):
+    """Replace watermarker with no-op to skip CPU processing."""
+    model.watermarker = NoOpWatermarker()
+    return model
 
 # Local cache paths for models (avoids HuggingFace auth)
 LOCAL_MODEL_PATHS = {
@@ -164,22 +190,53 @@ def get_model(model_type: str = "standard"):
             from chatterbox.tts import ChatterboxTTS
             local_path = LOCAL_MODEL_PATHS.get("standard")
             if local_path:
-                _models[model_type] = ChatterboxTTS.from_local(local_path, device=device)
+                model = ChatterboxTTS.from_local(local_path, device=device)
             else:
-                _models[model_type] = ChatterboxTTS.from_pretrained(device=device)
+                model = ChatterboxTTS.from_pretrained(device=device)
+            _models[model_type] = _disable_watermarker(model)
         elif model_type == "turbo":
             # Turbo model not cached locally - fall back to standard
             print("Turbo model not available locally, using standard model instead")
             return get_model("standard")
         elif model_type == "multilingual":
             from chatterbox.mtl_tts import ChatterboxMultilingualTTS
-            _models[model_type] = ChatterboxMultilingualTTS.from_pretrained(device=device)
+            model = ChatterboxMultilingualTTS.from_pretrained(device=device)
+            _models[model_type] = _disable_watermarker(model)
         else:
             raise ValueError(f"Unknown model type: {model_type}")
 
         print(f"{model_type} model loaded successfully!")
 
     return _models[model_type]
+
+
+def get_cached_conditionals(model, voice_path: str, exaggeration: float = 0.5):
+    """
+    Get cached voice conditionals, computing them only on first use.
+
+    This eliminates the expensive CPU librosa preprocessing for each generation.
+    Cache key includes file mtime so cache invalidates if voice file changes.
+    """
+    global _voice_conds_cache
+
+    # Get file modification time for cache invalidation
+    mtime = os.path.getmtime(voice_path)
+    cache_key = (voice_path, mtime, exaggeration)
+
+    with _voice_cache_lock:
+        if cache_key in _voice_conds_cache:
+            return _voice_conds_cache[cache_key]
+
+    # Not in cache - compute conditionals (CPU-intensive librosa work)
+    print(f"Computing voice conditionals for: {voice_path}")
+    model.prepare_conditionals(voice_path, exaggeration=exaggeration)
+    conds = model.conds
+
+    with _voice_cache_lock:
+        _voice_conds_cache[cache_key] = conds
+        print(f"Cached conditionals for {voice_path} (cache size: {len(_voice_conds_cache)})")
+
+    return conds
 
 
 def get_model_pool():
@@ -198,7 +255,7 @@ def get_model_pool():
                 model = ChatterboxTTS.from_local(local_path, device=device)
             else:
                 model = ChatterboxTTS.from_pretrained(device=device)
-            _model_pool.put(model)
+            _model_pool.put(_disable_watermarker(model))
         print(f"Model pool ready with {_pool_size} instances!")
 
     return _model_pool
@@ -379,8 +436,12 @@ def text_to_speech(
         }
         if model == "multilingual" and language:
             kwargs["language_id"] = language
+
+        # Use cached conditionals for voice cloning (avoids CPU librosa work)
         if audio_prompt_path:
-            kwargs["audio_prompt_path"] = audio_prompt_path
+            cached_conds = get_cached_conditionals(tts_model, audio_prompt_path, exaggeration)
+            tts_model.conds = cached_conds
+            # DON'T pass audio_prompt_path to generate() - we've already set conds
 
         # Split text into chunks to avoid 40-second generation limit
         chunks = split_text_into_chunks(text)
@@ -452,8 +513,12 @@ def _generate_single_pooled(item: dict, model_pool: Queue, sample_rate: int) -> 
             "exaggeration": exaggeration,
             "cfg_weight": cfg_weight,
         }
+
+        # Use cached conditionals for voice cloning (avoids CPU librosa work)
         if audio_prompt_path:
-            kwargs["audio_prompt_path"] = audio_prompt_path
+            cached_conds = get_cached_conditionals(tts_model, audio_prompt_path, exaggeration)
+            tts_model.conds = cached_conds
+            # DON'T pass audio_prompt_path to generate() - we've already set conds
 
         # Generate audio
         chunks = split_text_into_chunks(text)
