@@ -1,0 +1,670 @@
+"""
+Chatterbox TTS MCP Server
+
+A FastMCP server that exposes Chatterbox TTS capabilities over the network.
+Supports text-to-speech generation and voice cloning.
+
+Usage:
+    python server.py
+
+Connect from Claude Code on your laptop:
+    Add to your MCP config with URL: http://<your-pc-ip>:8765/mcp
+"""
+
+import io
+import base64
+import tempfile
+import os
+import time
+import re
+from pathlib import Path
+from typing import Optional, Literal, List
+
+import torch
+import torchaudio as ta
+from fastmcp import FastMCP
+from fastmcp.utilities.types import Audio
+from pydantic import Field
+from starlette.responses import FileResponse
+from starlette.routing import Route
+
+# Output directory for generated audio
+OUTPUT_DIR = Path(r"C:\Users\tazzo\chatterbox-mcp\output")
+OUTPUT_DIR.mkdir(exist_ok=True)
+
+# Voice reference directory for voice cloning
+VOICES_DIR = Path(r"C:\Users\tazzo\chatterbox-mcp\voices")
+VOICES_DIR.mkdir(exist_ok=True)
+
+# Initialize FastMCP server
+mcp = FastMCP(
+    name="Chatterbox TTS",
+    instructions="""
+# Chatterbox TTS Server
+
+You have access to a powerful text-to-speech system running on a remote GPU server. Use this to generate high-quality speech audio from text.
+
+## Quick Start
+
+For basic TTS, just call `text_to_speech` with your text:
+```
+text_to_speech(text="Hello, this is a test of the text to speech system.")
+```
+
+The tool returns WAV audio data. Save it to a file for the user:
+```python
+# The audio is returned as base64 - decode and save it
+import base64
+with open("output.wav", "wb") as f:
+    f.write(base64.b64decode(audio_content))
+```
+
+## Available Models
+
+### 1. turbo (DEFAULT - recommended for most uses)
+- Fastest generation, lowest VRAM usage
+- English only
+- Supports paralinguistic tags for expressive speech:
+  - [laugh], [chuckle], [cough], [sigh], [gasp], [groan], [yawn], [clearing throat]
+- Example: `text_to_speech(text="That's hilarious! [laugh] I can't believe it.")`
+
+### 2. standard
+- Original Chatterbox model, English only
+- More control via `exaggeration` (0.0-1.0) and `cfg_weight` (0.0-1.0)
+- Higher exaggeration = more expressive/dramatic
+- Lower cfg_weight = slower, more deliberate pacing
+- Example: `text_to_speech(text="...", model="standard", exaggeration=0.7, cfg_weight=0.3)`
+
+### 3. multilingual
+- Supports 23 languages: ar, da, de, el, en, es, fi, fr, he, hi, it, ja, ko, ms, nl, no, pl, pt, ru, sv, sw, tr, zh
+- Must specify `language` parameter
+- Example: `text_to_speech(text="Bonjour, comment allez-vous?", model="multilingual", language="fr")`
+
+## Voice Cloning
+
+### Using Saved Voices (Recommended)
+First, save a voice using `save_voice()`, then reference it by name:
+
+```python
+# Save a voice (one-time)
+save_voice(name="david", audio_url="http://example.com/voice.wav")
+
+# List available voices
+list_voices()
+
+# Use the saved voice
+text_to_speech(text="Hello, this is my cloned voice", voice_name="david")
+```
+
+### Alternative: Base64 Audio
+For one-off cloning without saving:
+
+```python
+text_to_speech(
+    text="This will sound like the reference voice",
+    voice_audio_base64="<base64 wav data>"
+)
+```
+
+## Tips for Best Results
+
+### General Use
+- The default settings (`exaggeration=0.5`, `cfg_weight=0.5`) work well for most prompts across all languages.
+- Punctuation matters: Use proper punctuation for natural pacing. Commas create pauses, periods create stops.
+- If the reference speaker has a fast speaking style, lower `cfg_weight` to around 0.3 to improve pacing.
+
+### Voice Cloning
+- Best results with 10-15 seconds of clean speech, minimal background noise, consistent volume.
+- Ensure the reference clip matches the target language. Otherwise, outputs may inherit the accent of the reference clip's language.
+- To mitigate accent transfer in multilingual use, set `cfg_weight` to 0.
+
+### Expressive or Dramatic Speech
+- Use lower `cfg_weight` values (e.g., 0.3) and increase `exaggeration` to 0.7 or higher.
+- Higher exaggeration speeds up speech; reducing `cfg_weight` compensates with slower, more deliberate pacing.
+- Example: `text_to_speech(text="...", exaggeration=0.7, cfg_weight=0.3)`
+
+### Long Text
+- Long text is automatically split into chunks and concatenated seamlessly.
+- The server handles texts of any length - no manual splitting needed.
+- Each chunk generates up to ~30 seconds of audio, then they're joined with natural pauses.
+
+## Workflow Example
+
+When user asks for TTS:
+1. Call text_to_speech with appropriate parameters
+2. Save the returned audio to a .wav file in a convenient location
+3. Tell the user where the file was saved
+
+When user wants voice cloning:
+1. Ask for or locate the reference audio file
+2. Read it and base64 encode it
+3. Pass it to text_to_speech along with the text
+4. Save the output
+"""
+)
+
+# Global model cache
+_models = {}
+
+# Local cache paths for models (avoids HuggingFace auth)
+LOCAL_MODEL_PATHS = {
+    "standard": r"C:\Users\tazzo\.cache\huggingface\hub\models--ResembleAI--chatterbox\snapshots\05e904af2b5c7f8e482687a9d7336c5c824467d9",
+}
+
+def get_model(model_type: str = "standard"):
+    """Lazily load and cache models."""
+    if model_type not in _models:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"Loading {model_type} model on {device}...")
+
+        if model_type == "standard":
+            from chatterbox.tts import ChatterboxTTS
+            local_path = LOCAL_MODEL_PATHS.get("standard")
+            if local_path:
+                _models[model_type] = ChatterboxTTS.from_local(local_path, device=device)
+            else:
+                _models[model_type] = ChatterboxTTS.from_pretrained(device=device)
+        elif model_type == "turbo":
+            # Turbo model not cached locally - fall back to standard
+            print("Turbo model not available locally, using standard model instead")
+            return get_model("standard")
+        elif model_type == "multilingual":
+            from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+            _models[model_type] = ChatterboxMultilingualTTS.from_pretrained(device=device)
+        else:
+            raise ValueError(f"Unknown model type: {model_type}")
+
+        print(f"{model_type} model loaded successfully!")
+
+    return _models[model_type]
+
+
+def save_audio_to_bytes(wav_tensor: torch.Tensor, sample_rate: int) -> bytes:
+    """Convert audio tensor to WAV bytes."""
+    # Use temp file instead of BytesIO (FFmpeg backend doesn't support BytesIO)
+    temp_path = tempfile.mktemp(suffix=".wav")
+    try:
+        ta.save(temp_path, wav_tensor, sample_rate)
+        with open(temp_path, "rb") as f:
+            return f.read()
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+# Maximum characters per chunk (~250-300 chars gives ~30 sec audio)
+MAX_CHUNK_CHARS = 280
+
+
+def split_text_into_chunks(text: str, max_chars: int = MAX_CHUNK_CHARS) -> List[str]:
+    """
+    Split text into chunks based on sentence boundaries.
+    Tries to keep chunks under max_chars while respecting sentence structure.
+    """
+    # Split on sentence boundaries (. ! ?)
+    sentence_pattern = r'(?<=[.!?])\s+'
+    sentences = re.split(sentence_pattern, text.strip())
+
+    chunks = []
+    current_chunk = ""
+
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+
+        # If single sentence is too long, split on secondary boundaries
+        if len(sentence) > max_chars:
+            # Split on semicolons, colons, or commas
+            sub_parts = re.split(r'(?<=[;:,])\s+', sentence)
+            for part in sub_parts:
+                part = part.strip()
+                if not part:
+                    continue
+                if len(current_chunk) + len(part) + 1 <= max_chars:
+                    current_chunk = f"{current_chunk} {part}".strip() if current_chunk else part
+                else:
+                    if current_chunk:
+                        chunks.append(current_chunk)
+                    # If part is still too long, force split by character count
+                    if len(part) > max_chars:
+                        words = part.split()
+                        current_chunk = ""
+                        for word in words:
+                            if len(current_chunk) + len(word) + 1 <= max_chars:
+                                current_chunk = f"{current_chunk} {word}".strip() if current_chunk else word
+                            else:
+                                if current_chunk:
+                                    chunks.append(current_chunk)
+                                current_chunk = word
+                    else:
+                        current_chunk = part
+        elif len(current_chunk) + len(sentence) + 1 <= max_chars:
+            current_chunk = f"{current_chunk} {sentence}".strip() if current_chunk else sentence
+        else:
+            if current_chunk:
+                chunks.append(current_chunk)
+            current_chunk = sentence
+
+    # Don't forget the last chunk
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    return chunks
+
+
+def concatenate_audio_tensors(tensors: List[torch.Tensor], sample_rate: int, silence_duration: float = 0.3) -> torch.Tensor:
+    """
+    Concatenate multiple audio tensors with short silence between them.
+    """
+    if not tensors:
+        raise ValueError("No audio tensors to concatenate")
+
+    if len(tensors) == 1:
+        return tensors[0]
+
+    # Create silence tensor (silence_duration seconds)
+    silence_samples = int(sample_rate * silence_duration)
+    silence = torch.zeros(1, silence_samples)
+
+    # Concatenate all tensors with silence between
+    result_parts = []
+    for i, tensor in enumerate(tensors):
+        # Ensure tensor is 2D (channels, samples)
+        if tensor.dim() == 1:
+            tensor = tensor.unsqueeze(0)
+        result_parts.append(tensor)
+        if i < len(tensors) - 1:  # Don't add silence after last chunk
+            result_parts.append(silence)
+
+    return torch.cat(result_parts, dim=1)
+
+
+@mcp.tool
+def text_to_speech(
+    text: str = Field(description="The text to convert to speech. Supports paralinguistic tags like [laugh], [cough], [chuckle] with turbo model."),
+    model: Literal["standard", "multilingual"] = Field(
+        default="standard",
+        description="Model to use: 'standard' (English, CFG controls), 'multilingual' (23+ languages)"
+    ),
+    voice_name: Optional[str] = Field(
+        default=None,
+        description="Name of a saved voice to clone. Use list_voices() to see available voices. Takes priority over voice_audio_base64."
+    ),
+    voice_audio_base64: Optional[str] = Field(
+        default=None,
+        description="Base64-encoded WAV audio for voice cloning. Should be 5-15 seconds of clear speech. Prefer using voice_name instead."
+    ),
+    language: Optional[str] = Field(
+        default=None,
+        description="Language code for multilingual model (e.g., 'en', 'fr', 'es', 'de', 'zh', 'ja'). Only used with multilingual model."
+    ),
+    exaggeration: float = Field(
+        default=0.5,
+        description="Exaggeration level (0.0-1.0). Higher = more expressive. Only for standard/multilingual models."
+    ),
+    cfg_weight: float = Field(
+        default=0.5,
+        description="CFG weight (0.0-1.0). Lower = slower, more deliberate speech. Only for standard/multilingual models."
+    )
+) -> Audio:
+    """
+    Generate speech from text using Chatterbox TTS.
+
+    Returns a WAV audio file that can be saved locally.
+
+    For voice cloning, provide a voice_name (recommended) or base64-encoded WAV.
+
+    Examples:
+    - Basic TTS: text_to_speech(text="Hello, world!")
+    - Voice cloning: text_to_speech(text="Hello", voice_name="david")
+    - Multilingual: text_to_speech(text="Bonjour!", model="multilingual", language="fr")
+    """
+    tts_model = get_model(model)
+
+    # Handle voice cloning reference audio
+    audio_prompt_path = None
+    temp_file = None
+
+    # Priority: voice_name > voice_audio_base64
+    if voice_name:
+        # Look for voice file in voices directory
+        voice_file = VOICES_DIR / f"{voice_name}.wav"
+        if not voice_file.exists():
+            # Try without extension in case they included it
+            voice_file = VOICES_DIR / voice_name
+            if not voice_file.exists():
+                available = [f.stem for f in VOICES_DIR.glob("*.wav")]
+                raise ValueError(f"Voice '{voice_name}' not found. Available voices: {available}")
+        audio_prompt_path = str(voice_file)
+        print(f"Using voice: {voice_file}")
+    elif voice_audio_base64:
+        # Decode base64 audio and save to temp file
+        audio_bytes = base64.b64decode(voice_audio_base64)
+        temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        temp_file.write(audio_bytes)
+        temp_file.close()
+        audio_prompt_path = temp_file.name
+
+    try:
+        # Build generation kwargs
+        kwargs = {
+            "exaggeration": exaggeration,
+            "cfg_weight": cfg_weight,
+        }
+        if model == "multilingual" and language:
+            kwargs["language_id"] = language
+        if audio_prompt_path:
+            kwargs["audio_prompt_path"] = audio_prompt_path
+
+        # Split text into chunks to avoid 40-second generation limit
+        chunks = split_text_into_chunks(text)
+        num_chunks = len(chunks)
+
+        if num_chunks > 1:
+            print(f"Text split into {num_chunks} chunks for generation...")
+
+        # Generate audio for each chunk
+        audio_tensors = []
+        for i, chunk in enumerate(chunks):
+            if num_chunks > 1:
+                print(f"Generating chunk {i + 1}/{num_chunks}: {chunk[:50]}...")
+            wav = tts_model.generate(chunk, **kwargs)
+            audio_tensors.append(wav)
+
+        # Concatenate all audio chunks
+        if num_chunks > 1:
+            print("Concatenating audio chunks...")
+            final_wav = concatenate_audio_tensors(audio_tensors, tts_model.sr)
+        else:
+            final_wav = audio_tensors[0]
+
+        # Convert to bytes and save to file
+        audio_bytes = save_audio_to_bytes(final_wav, tts_model.sr)
+
+        # Generate unique filename and save
+        timestamp = int(time.time())
+        filename = f"tts_{timestamp}.wav"
+        output_file = OUTPUT_DIR / filename
+        with open(output_file, "wb") as f:
+            f.write(audio_bytes)
+
+        print(f"Audio saved to: {output_file}")
+
+        # Return both the audio and download info
+        return {
+            "status": "success",
+            "filename": filename,
+            "download_url": f"http://192.168.1.5:8765/download/{filename}",
+            "size_bytes": len(audio_bytes),
+            "audio_base64": base64.b64encode(audio_bytes).decode("utf-8")
+        }
+
+    finally:
+        # Clean up temp file
+        if temp_file and os.path.exists(temp_file.name):
+            os.unlink(temp_file.name)
+
+
+@mcp.tool
+def list_voices() -> dict:
+    """
+    List all saved voices available for voice cloning.
+
+    Returns a dictionary with voice names and their file info.
+    Use these names with the voice_name parameter in text_to_speech.
+    """
+    voices = {}
+    for voice_file in VOICES_DIR.glob("*.wav"):
+        stat = voice_file.stat()
+        voices[voice_file.stem] = {
+            "filename": voice_file.name,
+            "size_bytes": stat.st_size,
+            "size_mb": round(stat.st_size / (1024 * 1024), 2),
+        }
+    return {
+        "voices_directory": str(VOICES_DIR),
+        "available_voices": voices,
+        "count": len(voices),
+        "usage": "Use voice_name parameter in text_to_speech, e.g., text_to_speech(text='Hello', voice_name='david')"
+    }
+
+
+@mcp.tool
+def save_voice(
+    name: str = Field(description="Name for the voice (will be saved as name.wav)"),
+    audio_url: Optional[str] = Field(default=None, description="URL to download the voice audio from"),
+    audio_base64: Optional[str] = Field(default=None, description="Base64-encoded WAV audio"),
+) -> dict:
+    """
+    Save a voice reference audio for later use in voice cloning.
+
+    Provide either audio_url OR audio_base64 (not both).
+    The audio should be 5-15 seconds of clear speech.
+
+    Examples:
+    - save_voice(name="david", audio_url="http://example.com/voice.wav")
+    - save_voice(name="sarah", audio_base64="<base64 data>")
+    """
+    import urllib.request
+
+    if not audio_url and not audio_base64:
+        raise ValueError("Must provide either audio_url or audio_base64")
+
+    if audio_url and audio_base64:
+        raise ValueError("Provide only one of audio_url or audio_base64, not both")
+
+    # Sanitize name
+    safe_name = "".join(c for c in name if c.isalnum() or c in "-_").lower()
+    if not safe_name:
+        raise ValueError("Name must contain at least one alphanumeric character")
+
+    output_path = VOICES_DIR / f"{safe_name}.wav"
+
+    if audio_url:
+        print(f"Downloading voice from {audio_url}...")
+        urllib.request.urlretrieve(audio_url, output_path)
+    else:
+        print(f"Saving voice from base64...")
+        audio_bytes = base64.b64decode(audio_base64)
+        with open(output_path, "wb") as f:
+            f.write(audio_bytes)
+
+    stat = output_path.stat()
+    return {
+        "status": "success",
+        "voice_name": safe_name,
+        "file_path": str(output_path),
+        "size_bytes": stat.st_size,
+        "usage": f"text_to_speech(text='Your text', voice_name='{safe_name}')"
+    }
+
+
+@mcp.tool
+def delete_voice(
+    name: str = Field(description="Name of the voice to delete")
+) -> dict:
+    """
+    Delete a saved voice from the voices directory.
+    """
+    voice_file = VOICES_DIR / f"{name}.wav"
+    if not voice_file.exists():
+        available = [f.stem for f in VOICES_DIR.glob("*.wav")]
+        raise ValueError(f"Voice '{name}' not found. Available voices: {available}")
+
+    voice_file.unlink()
+    return {
+        "status": "success",
+        "deleted": name,
+        "message": f"Voice '{name}' has been deleted"
+    }
+
+
+@mcp.tool
+def list_supported_languages() -> dict:
+    """
+    List all languages supported by the multilingual model.
+
+    Returns a dictionary mapping language codes to language names.
+    """
+    return {
+        "ar": "Arabic",
+        "da": "Danish",
+        "de": "German",
+        "el": "Greek",
+        "en": "English",
+        "es": "Spanish",
+        "fi": "Finnish",
+        "fr": "French",
+        "he": "Hebrew",
+        "hi": "Hindi",
+        "it": "Italian",
+        "ja": "Japanese",
+        "ko": "Korean",
+        "ms": "Malay",
+        "nl": "Dutch",
+        "no": "Norwegian",
+        "pl": "Polish",
+        "pt": "Portuguese",
+        "ru": "Russian",
+        "sv": "Swedish",
+        "sw": "Swahili",
+        "tr": "Turkish",
+        "zh": "Chinese"
+    }
+
+
+@mcp.tool
+def list_paralinguistic_tags() -> dict:
+    """
+    List paralinguistic tags supported by the turbo model.
+
+    These tags can be embedded in text to add expressiveness.
+    Example: "That's so funny! [laugh]"
+    """
+    return {
+        "tags": [
+            "[laugh]",
+            "[chuckle]",
+            "[cough]",
+            "[sigh]",
+            "[gasp]",
+            "[groan]",
+            "[yawn]",
+            "[clearing throat]"
+        ],
+        "usage": "Embed tags in your text, e.g., 'Hello! [laugh] How are you?'",
+        "note": "Only supported by the 'turbo' model"
+    }
+
+
+@mcp.tool
+def get_model_info() -> dict:
+    """
+    Get information about available TTS models and their capabilities.
+    """
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    cuda_available = torch.cuda.is_available()
+
+    return {
+        "device": device,
+        "cuda_available": cuda_available,
+        "cuda_device_name": torch.cuda.get_device_name(0) if cuda_available else None,
+        "models": {
+            "turbo": {
+                "name": "Chatterbox-Turbo",
+                "parameters": "350M",
+                "languages": ["English"],
+                "features": [
+                    "Paralinguistic tags ([laugh], [cough], etc.)",
+                    "Lower compute/VRAM requirements",
+                    "Optimized for voice agents"
+                ],
+                "requires_reference_audio": True
+            },
+            "standard": {
+                "name": "Chatterbox",
+                "parameters": "500M",
+                "languages": ["English"],
+                "features": [
+                    "CFG weight control",
+                    "Exaggeration control",
+                    "Zero-shot voice cloning"
+                ],
+                "requires_reference_audio": False
+            },
+            "multilingual": {
+                "name": "Chatterbox-Multilingual",
+                "parameters": "500M",
+                "languages": "23+ languages",
+                "features": [
+                    "Multi-language support",
+                    "Zero-shot voice cloning",
+                    "CFG and exaggeration controls"
+                ],
+                "requires_reference_audio": False
+            }
+        },
+        "loaded_models": list(_models.keys())
+    }
+
+
+if __name__ == "__main__":
+    import socket
+
+    # Get local IP for display
+    hostname = socket.gethostname()
+    try:
+        local_ip = socket.gethostbyname(hostname)
+    except:
+        local_ip = "127.0.0.1"
+
+    print("=" * 60)
+    print("Chatterbox TTS MCP Server")
+    print("=" * 60)
+    print(f"Local URL:   http://127.0.0.1:8765/mcp")
+    print(f"Network URL: http://{local_ip}:8765/mcp")
+    print("-" * 60)
+    print("To connect from Claude Code on another machine, add to your")
+    print("MCP config (settings or .claude/settings.json):")
+    print()
+    print(f'  "chatterbox": {{')
+    print(f'    "type": "url",')
+    print(f'    "url": "http://{local_ip}:8765/mcp"')
+    print(f'  }}')
+    print("=" * 60)
+
+    # Add download endpoint for audio files
+    async def download_audio(request):
+        filename = request.path_params["filename"]
+        file_path = OUTPUT_DIR / filename
+        if file_path.exists() and file_path.suffix == ".wav":
+            return FileResponse(file_path, media_type="audio/wav", filename=filename)
+        from starlette.responses import JSONResponse
+        return JSONResponse({"error": "File not found"}, status_code=404)
+
+    # Get the underlying Starlette app and add our route
+    from starlette.routing import Route
+    download_route = Route("/download/{filename}", download_audio)
+
+    print(f"Download URL: http://{local_ip}:8765/download/<filename>")
+    print("=" * 60)
+
+    # Run server on all interfaces so it's accessible from other machines
+    # stateless_http=True removes session management so connections don't expire
+    import uvicorn
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+
+    # Create a custom app that includes both MCP and download routes
+    # IMPORTANT: Must pass lifespan from MCP app for proper initialization
+    mcp_http_app = mcp.http_app()
+    app = Starlette(
+        routes=[
+            download_route,
+            Mount("/", app=mcp_http_app),
+        ],
+        lifespan=mcp_http_app.lifespan,
+    )
+
+    uvicorn.run(app, host="0.0.0.0", port=8765, ws="wsproto")

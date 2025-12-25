@@ -1,0 +1,29 @@
+# Generated audio files
+output/*.wav
+
+# Voice references (user-specific)
+voices/*.wav
+
+# Temporary files
+voice_clip.wav
+voice_reference.wav
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
