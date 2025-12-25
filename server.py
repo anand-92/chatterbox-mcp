@@ -491,6 +491,109 @@ def delete_voice(
 
 
 @mcp.tool
+def clone_voice_from_youtube(
+    name: str = Field(description="Name for the voice (e.g., 'draymond', 'kobe')"),
+    youtube_url: str = Field(description="YouTube video URL"),
+    timestamp: str = Field(description="Start timestamp in MM:SS or HH:MM:SS format (e.g., '5:10' or '1:23:45')"),
+    duration: int = Field(default=15, description="Duration in seconds to extract (default: 15, recommended: 10-15)")
+) -> dict:
+    """
+    Clone a voice directly from a YouTube video.
+
+    Downloads the audio, extracts a clip at the specified timestamp, and saves it as a voice.
+    Much faster than manual download/upload workflow.
+
+    Examples:
+    - clone_voice_from_youtube(name="draymond", youtube_url="https://youtube.com/watch?v=xxx", timestamp="5:10")
+    - clone_voice_from_youtube(name="kobe", youtube_url="https://youtu.be/xxx", timestamp="14:20", duration=12)
+    """
+    import subprocess
+    import shutil
+
+    # Check for required tools
+    yt_dlp = shutil.which("yt-dlp")
+    ffmpeg = shutil.which("ffmpeg")
+
+    if not yt_dlp:
+        raise ValueError("yt-dlp not found. Install with: pip install yt-dlp")
+    if not ffmpeg:
+        raise ValueError("ffmpeg not found. Please install ffmpeg.")
+
+    # Sanitize name
+    safe_name = "".join(c for c in name if c.isalnum() or c in "-_").lower()
+    if not safe_name:
+        raise ValueError("Name must contain at least one alphanumeric character")
+
+    # Create temp directory for intermediate files
+    temp_dir = Path(tempfile.mkdtemp())
+    temp_audio = temp_dir / "audio.wav"
+    output_path = VOICES_DIR / f"{safe_name}.wav"
+
+    try:
+        # Download audio from YouTube
+        print(f"Downloading audio from {youtube_url}...")
+        result = subprocess.run([
+            yt_dlp,
+            "-x",  # Extract audio
+            "--audio-format", "wav",
+            "-o", str(temp_audio.with_suffix(".%(ext)s")),
+            youtube_url
+        ], capture_output=True, text=True, timeout=120)
+
+        if result.returncode != 0:
+            raise ValueError(f"yt-dlp failed: {result.stderr}")
+
+        # Find the downloaded file (yt-dlp may add extension)
+        downloaded_files = list(temp_dir.glob("audio.*"))
+        if not downloaded_files:
+            raise ValueError("No audio file downloaded")
+        downloaded_audio = downloaded_files[0]
+
+        # Parse timestamp to seconds for ffmpeg
+        # Normalize timestamp format (add leading zeros if needed)
+        parts = timestamp.split(":")
+        if len(parts) == 2:
+            timestamp_formatted = f"00:{parts[0].zfill(2)}:{parts[1].zfill(2)}"
+        elif len(parts) == 3:
+            timestamp_formatted = f"{parts[0].zfill(2)}:{parts[1].zfill(2)}:{parts[2].zfill(2)}"
+        else:
+            timestamp_formatted = timestamp
+
+        # Extract clip with ffmpeg
+        print(f"Extracting {duration}s clip at {timestamp}...")
+        result = subprocess.run([
+            ffmpeg,
+            "-i", str(downloaded_audio),
+            "-ss", timestamp_formatted,
+            "-t", str(duration),
+            "-ar", "24000",  # Sample rate for TTS
+            "-ac", "1",      # Mono
+            "-y",            # Overwrite
+            str(output_path)
+        ], capture_output=True, text=True, timeout=60)
+
+        if result.returncode != 0:
+            raise ValueError(f"ffmpeg failed: {result.stderr}")
+
+        stat = output_path.stat()
+        print(f"Voice '{safe_name}' created: {stat.st_size} bytes")
+
+        return {
+            "status": "success",
+            "voice_name": safe_name,
+            "file_path": str(output_path),
+            "size_bytes": stat.st_size,
+            "timestamp": timestamp,
+            "duration": duration,
+            "usage": f"text_to_speech(text='Your text', voice_name='{safe_name}')"
+        }
+
+    finally:
+        # Cleanup temp directory
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+@mcp.tool
 def list_supported_languages() -> dict:
     """
     List all languages supported by the multilingual model.
