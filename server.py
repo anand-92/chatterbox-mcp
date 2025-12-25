@@ -51,12 +51,9 @@ For basic TTS, just call `text_to_speech` with your text:
 text_to_speech(text="Hello, this is a test of the text to speech system.")
 ```
 
-The tool returns WAV audio data. Save it to a file for the user:
-```python
-# The audio is returned as base64 - decode and save it
-import base64
-with open("output.wav", "wb") as f:
-    f.write(base64.b64decode(audio_content))
+The tool returns a download URL. Use curl to save the file:
+```bash
+curl -s "<download_url>" -o output.wav
 ```
 
 ## Available Models
@@ -132,14 +129,14 @@ text_to_speech(
 
 When user asks for TTS:
 1. Call text_to_speech with appropriate parameters
-2. Save the returned audio to a .wav file in a convenient location
+2. Use curl to download the file from the returned download_url
 3. Tell the user where the file was saved
 
 When user wants voice cloning:
 1. Ask for or locate the reference audio file
-2. Read it and base64 encode it
-3. Pass it to text_to_speech along with the text
-4. Save the output
+2. Save it as a voice using save_voice() with audio_url or audio_base64
+3. Use the voice_name parameter in text_to_speech
+4. Download the output with curl
 """
 )
 
@@ -391,13 +388,13 @@ def text_to_speech(
 
         print(f"Audio saved to: {output_file}")
 
-        # Return both the audio and download info
+        # Return download info only (no base64 to avoid token overflow)
         return {
             "status": "success",
             "filename": filename,
             "download_url": f"http://192.168.1.5:8765/download/{filename}",
             "size_bytes": len(audio_bytes),
-            "audio_base64": base64.b64encode(audio_bytes).decode("utf-8")
+            "message": "Use curl to download the file from download_url"
         }
 
     finally:
