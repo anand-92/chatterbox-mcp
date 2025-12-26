@@ -681,6 +681,134 @@ def batch_text_to_speech(
     }
 
 
+def _generate_single_tensor(item: dict, model_pool: Queue, sample_rate: int) -> torch.Tensor:
+    """Generate a single TTS clip and return the audio tensor (not saved to file)."""
+    tts_model = model_pool.get()
+
+    try:
+        text = item.get("text", "")
+        voice_name = item.get("voice_name")
+        exaggeration = item.get("exaggeration", 0.5)
+        cfg_weight = item.get("cfg_weight", 0.5)
+
+        audio_prompt_path = None
+        if voice_name:
+            voice_file = VOICES_DIR / f"{voice_name}.wav"
+            if voice_file.exists():
+                audio_prompt_path = str(voice_file)
+
+        kwargs = {
+            "exaggeration": exaggeration,
+            "cfg_weight": cfg_weight,
+        }
+
+        if audio_prompt_path:
+            cached_conds = get_cached_conditionals(tts_model, audio_prompt_path, exaggeration)
+            tts_model.conds = cached_conds
+
+        chunks = split_text_into_chunks(text)
+        audio_tensors = []
+        for chunk in chunks:
+            wav = tts_model.generate(chunk, **kwargs)
+            audio_tensors.append(wav)
+
+        if len(audio_tensors) > 1:
+            return concatenate_audio_tensors(audio_tensors, sample_rate, silence_duration=0.15)
+        return audio_tensors[0]
+
+    finally:
+        model_pool.put(tts_model)
+
+
+@mcp.tool
+def generate_conversation(
+    items: List[dict] = Field(description="List of dialogue items. Each: {text, voice_name, exaggeration (0.5), cfg_weight (0.5)}"),
+    output_name: Optional[str] = Field(default=None, description="Output filename (without .wav). Auto-generated if not provided."),
+    silence_between: float = Field(default=0.4, description="Seconds of silence between clips (default 0.4)")
+) -> dict:
+    """
+    Generate a multi-voice conversation and return a single combined audio file.
+
+    Perfect for podcasts, dialogues, or any multi-speaker content.
+    Generates all clips in parallel, then stitches them together server-side.
+
+    Example:
+    generate_conversation(items=[
+        {"text": "Welcome to the show!", "voice_name": "trump", "exaggeration": 0.6},
+        {"text": "Thanks for having me.", "voice_name": "kobe", "exaggeration": 0.5},
+        {"text": "Let's talk about basketball.", "voice_name": "trump", "exaggeration": 0.6},
+    ], output_name="podcast_episode_1")
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    if not items:
+        return {"status": "error", "message": "No items provided"}
+
+    model_pool = get_model_pool()
+
+    # Get sample rate
+    temp_model = model_pool.get()
+    sample_rate = temp_model.sr
+    model_pool.put(temp_model)
+
+    max_workers = min(len(items), _pool_size)
+    print(f"Generating conversation: {len(items)} clips with {max_workers} workers...")
+
+    # Generate all clips in parallel, keeping track of order
+    tensors_by_idx = {}
+    errors = []
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_idx = {
+            executor.submit(_generate_single_tensor, item, model_pool, sample_rate): idx
+            for idx, item in enumerate(items)
+        }
+
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            try:
+                tensor = future.result()
+                tensors_by_idx[idx] = tensor
+                print(f"  Generated clip {idx + 1}/{len(items)}")
+            except Exception as e:
+                errors.append({"index": idx, "error": str(e)})
+                print(f"  Error on clip {idx + 1}: {e}")
+
+    if errors:
+        return {"status": "error", "message": f"Failed to generate {len(errors)} clips", "errors": errors}
+
+    # Concatenate in order
+    print("Stitching clips together...")
+    ordered_tensors = [tensors_by_idx[i] for i in range(len(items))]
+    final_audio = concatenate_audio_tensors(ordered_tensors, sample_rate, silence_duration=silence_between)
+
+    # Save combined file
+    audio_bytes = save_audio_to_bytes(final_audio, sample_rate)
+
+    if output_name:
+        filename = f"{output_name}.wav"
+    else:
+        filename = f"conversation_{int(time.time())}.wav"
+
+    output_file = OUTPUT_DIR / filename
+    with open(output_file, "wb") as f:
+        f.write(audio_bytes)
+
+    # Calculate duration
+    duration_seconds = final_audio.shape[-1] / sample_rate
+
+    print(f"Conversation saved: {filename} ({duration_seconds:.1f}s)")
+
+    return {
+        "status": "success",
+        "filename": filename,
+        "download_url": f"http://{SERVER_IP}:{SERVER_PORT}/download/{filename}",
+        "size_bytes": len(audio_bytes),
+        "duration_seconds": round(duration_seconds, 2),
+        "clips_generated": len(items)
+    }
+
+
 @mcp.tool
 def list_voices() -> dict:
     """
