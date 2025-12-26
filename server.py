@@ -47,6 +47,58 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 VOICES_DIR = Path(r"C:\Users\tazzo\chatterbox-mcp\voices")
 VOICES_DIR.mkdir(exist_ok=True)
 
+# Server port
+SERVER_PORT = 8765
+
+def get_lan_ip():
+    """Get the LAN IP address (prefer 192.168.x.x or 10.x.x.x ranges)."""
+    import socket
+    import subprocess
+    import re
+
+    # Method 1: Connect to external address to find default route interface
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        if ip.startswith("192.168."):
+            return ip
+    except:
+        pass
+
+    # Method 2: Windows ipconfig
+    try:
+        result = subprocess.run(["ipconfig"], capture_output=True, text=True, timeout=5, shell=True)
+        if result.returncode == 0:
+            matches = re.findall(r"IPv4[^:]*:\s*(\d+\.\d+\.\d+\.\d+)", result.stdout)
+            for ip in matches:
+                if ip.startswith("192.168."):
+                    return ip
+            for ip in matches:
+                if not ip.startswith("127."):
+                    return ip
+    except:
+        pass
+
+    # Method 3: Linux hostname -I
+    try:
+        result = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            ips = result.stdout.strip().split()
+            for ip in ips:
+                if ip.startswith("192.168."):
+                    return ip
+            if ips:
+                return ips[0]
+    except:
+        pass
+
+    return "127.0.0.1"
+
+# Server IP (detected at module load)
+SERVER_IP = get_lan_ip()
+
 # Initialize FastMCP server
 mcp = FastMCP(
     name="Chatterbox TTS",
@@ -158,7 +210,7 @@ _models = {}
 import threading
 from queue import Queue
 _model_pool = None
-_pool_size = 4  # 4 instances - with caching + no watermark, PCIe should be fine
+_pool_size = 2  # 2 instances - reduces VRAM bandwidth contention on parallel requests
 
 # Voice conditionals cache - avoids expensive CPU librosa preprocessing for each generation
 # Key: (voice_path, mtime) -> Value: Conditionals object (GPU tensors)
@@ -486,7 +538,7 @@ def text_to_speech(
         return {
             "status": "success",
             "filename": filename,
-            "download_url": f"http://192.168.1.5:8765/download/{filename}",
+            "download_url": f"http://{SERVER_IP}:{SERVER_PORT}/download/{filename}",
             "size_bytes": len(audio_bytes),
             "message": "Use curl to download the file from download_url"
         }
@@ -548,7 +600,7 @@ def _generate_single_pooled(item: dict, model_pool: Queue, sample_rate: int) -> 
 
         return {
             "filename": filename,
-            "download_url": f"http://192.168.1.5:8765/download/{filename}",
+            "download_url": f"http://{SERVER_IP}:{SERVER_PORT}/download/{filename}",
             "size_bytes": len(audio_bytes),
         }
     finally:
@@ -662,19 +714,19 @@ def save_voice(
     Save a voice reference audio for later use in voice cloning.
 
     For best performance, use the HTTP upload endpoint instead:
-        curl -X POST "http://192.168.1.5:8765/upload_voice/name" -F "file=@audio.wav"
+        curl -X POST "http://<server-ip>:8765/upload_voice/name" -F "file=@audio.wav"
 
     Or provide audio_url to download from a URL.
     The audio should be 5-15 seconds of clear speech.
 
     Examples:
     - save_voice(name="david", audio_url="http://example.com/voice.wav")
-    - Or use curl: curl -X POST "http://192.168.1.5:8765/upload_voice/david" -F "file=@voice.wav"
+    - Or use curl: curl -X POST "http://<server-ip>:8765/upload_voice/david" -F "file=@voice.wav"
     """
     import urllib.request
 
     if not audio_url:
-        raise ValueError("Must provide audio_url, or use the HTTP upload endpoint: curl -X POST 'http://192.168.1.5:8765/upload_voice/name' -F 'file=@audio.wav'")
+        raise ValueError(f"Must provide audio_url, or use the HTTP upload endpoint: curl -X POST 'http://{SERVER_IP}:{SERVER_PORT}/upload_voice/name' -F 'file=@audio.wav'")
 
     # Sanitize name
     safe_name = "".join(c for c in name if c.isalnum() or c in "-_").lower()
@@ -941,12 +993,8 @@ def get_model_info() -> dict:
 if __name__ == "__main__":
     import socket
 
-    # Get local IP for display
-    hostname = socket.gethostname()
-    try:
-        local_ip = socket.gethostbyname(hostname)
-    except:
-        local_ip = "127.0.0.1"
+    # Use the already-detected SERVER_IP
+    local_ip = SERVER_IP
 
     print("=" * 60)
     print("Chatterbox TTS MCP Server")
@@ -958,7 +1006,7 @@ if __name__ == "__main__":
     print("MCP config (settings or .claude/settings.json):")
     print()
     print(f'  "chatterbox": {{')
-    print(f'    "type": "url",')
+    print(f'    "type": "http",')
     print(f'    "url": "http://{local_ip}:8765/mcp"')
     print(f'  }}')
     print("=" * 60)
