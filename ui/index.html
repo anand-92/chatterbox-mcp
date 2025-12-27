@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chatterbox TTS</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .tab-active { border-bottom: 2px solid #3b82f6; color: #3b82f6; }
+        .loading { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+        .slider-container input[type="range"] { -webkit-appearance: none; appearance: none; height: 8px; border-radius: 4px; background: #e5e7eb; }
+        .slider-container input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 20px; height: 20px; border-radius: 50%; background: #3b82f6; cursor: pointer; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen">
+    <div class="max-w-6xl mx-auto px-4 py-8">
+        <!-- Header -->
+        <header class="mb-8">
+            <h1 class="text-3xl font-bold text-white mb-2">Chatterbox TTS</h1>
+            <p class="text-gray-400">Text-to-Speech with Voice Cloning</p>
+            <div id="model-info" class="mt-4 text-sm text-gray-500"></div>
+        </header>
+
+        <!-- Tabs -->
+        <nav class="flex border-b border-gray-700 mb-6">
+            <button onclick="showTab('tts')" id="tab-tts" class="px-4 py-3 font-medium tab-active">Text to Speech</button>
+            <button onclick="showTab('conversation')" id="tab-conversation" class="px-4 py-3 font-medium text-gray-400 hover:text-gray-200">Conversation</button>
+            <button onclick="showTab('voices')" id="tab-voices" class="px-4 py-3 font-medium text-gray-400 hover:text-gray-200">Voice Manager</button>
+        </nav>
+
+        <!-- Text to Speech Tab -->
+        <div id="panel-tts" class="tab-panel">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <!-- Input Section -->
+                <div class="bg-gray-800 rounded-lg p-6">
+                    <h2 class="text-xl font-semibold mb-4">Generate Speech</h2>
+
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Text</label>
+                            <textarea id="tts-text" rows="4" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Enter text to convert to speech..."></textarea>
+                            <p class="text-xs text-gray-500 mt-1">Supports paralinguistic tags: [laugh], [cough], [sigh], etc.</p>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-300 mb-2">Model</label>
+                                <select id="tts-model" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                    <option value="standard">Standard (English)</option>
+                                    <option value="multilingual">Multilingual (23+ langs)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-300 mb-2">Voice</label>
+                                <select id="tts-voice" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                    <option value="">Default Voice</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div id="language-row" class="hidden">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Language</label>
+                            <select id="tts-language" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"></select>
+                        </div>
+
+                        <div class="slider-container">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">
+                                Exaggeration: <span id="exag-value" class="text-blue-400">0.5</span>
+                            </label>
+                            <input type="range" id="tts-exaggeration" min="0" max="1" step="0.1" value="0.5" class="w-full" oninput="document.getElementById('exag-value').textContent = this.value">
+                            <p class="text-xs text-gray-500 mt-1">Higher = more expressive/dramatic</p>
+                        </div>
+
+                        <div class="slider-container">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">
+                                CFG Weight: <span id="cfg-value" class="text-blue-400">0.5</span>
+                            </label>
+                            <input type="range" id="tts-cfg" min="0" max="1" step="0.1" value="0.5" class="w-full" oninput="document.getElementById('cfg-value').textContent = this.value">
+                            <p class="text-xs text-gray-500 mt-1">Lower = slower, more deliberate speech</p>
+                        </div>
+
+                        <button onclick="generateTTS()" id="tts-btn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-4 rounded-lg transition duration-200">
+                            Generate Speech
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Output Section -->
+                <div class="bg-gray-800 rounded-lg p-6">
+                    <h2 class="text-xl font-semibold mb-4">Output</h2>
+                    <div id="tts-output" class="space-y-4">
+                        <div class="text-gray-500 text-center py-12">
+                            <svg class="w-16 h-16 mx-auto mb-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>
+                            </svg>
+                            <p>Generated audio will appear here</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tags Reference -->
+            <div class="mt-6 bg-gray-800 rounded-lg p-4">
+                <h3 class="text-sm font-medium text-gray-300 mb-2">Paralinguistic Tags</h3>
+                <div id="tags-list" class="flex flex-wrap gap-2"></div>
+            </div>
+        </div>
+
+        <!-- Conversation Tab -->
+        <div id="panel-conversation" class="tab-panel hidden">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <!-- Conversation Builder -->
+                <div class="bg-gray-800 rounded-lg p-6">
+                    <h2 class="text-xl font-semibold mb-4">Build Conversation</h2>
+
+                    <div id="conversation-items" class="space-y-4 mb-4"></div>
+
+                    <button onclick="addConversationItem()" class="w-full border border-dashed border-gray-600 hover:border-gray-500 text-gray-400 hover:text-gray-300 py-3 px-4 rounded-lg transition duration-200">
+                        + Add Dialogue Line
+                    </button>
+
+                    <div class="mt-4 space-y-4">
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-300 mb-2">Output Name (optional)</label>
+                                <input type="text" id="conv-output-name" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2.5 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="conversation_1">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-300 mb-2">Silence Between (sec)</label>
+                                <input type="number" id="conv-silence" value="0.4" min="0" max="2" step="0.1" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            </div>
+                        </div>
+
+                        <button onclick="generateConversation()" id="conv-btn" class="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-3 px-4 rounded-lg transition duration-200">
+                            Generate Conversation
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Output Section -->
+                <div class="bg-gray-800 rounded-lg p-6">
+                    <h2 class="text-xl font-semibold mb-4">Output</h2>
+                    <div id="conv-output" class="space-y-4">
+                        <div class="text-gray-500 text-center py-12">
+                            <svg class="w-16 h-16 mx-auto mb-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8h2a2 2 0 012 2v6a2 2 0 01-2 2h-2v4l-4-4H9a1.994 1.994 0 01-1.414-.586m0 0L11 14h4a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2v4l.586-.586z"></path>
+                            </svg>
+                            <p>Generated conversation will appear here</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Voices Tab -->
+        <div id="panel-voices" class="tab-panel hidden">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Voice List -->
+                <div class="lg:col-span-2 bg-gray-800 rounded-lg p-6">
+                    <div class="flex items-center justify-between mb-4">
+                        <h2 class="text-xl font-semibold">Available Voices</h2>
+                        <button onclick="loadVoices()" class="text-blue-400 hover:text-blue-300 text-sm">Refresh</button>
+                    </div>
+                    <div id="voice-list" class="space-y-2"></div>
+                </div>
+
+                <!-- Voice Actions -->
+                <div class="space-y-6">
+                    <!-- Upload Voice -->
+                    <div class="bg-gray-800 rounded-lg p-6">
+                        <h3 class="text-lg font-semibold mb-4">Upload Voice</h3>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-300 mb-2">Voice Name</label>
+                                <input type="text" id="upload-name" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2.5 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="my-voice">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-300 mb-2">Audio File</label>
+                                <input type="file" id="upload-file" accept=".wav" class="w-full text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-blue-600 file:text-white file:font-medium file:cursor-pointer hover:file:bg-blue-700">
+                            </div>
+                            <button onclick="uploadVoice()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 px-4 rounded-lg transition duration-200">
+                                Upload
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Save from URL -->
+                    <div class="bg-gray-800 rounded-lg p-6">
+                        <h3 class="text-lg font-semibold mb-4">Save from URL</h3>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-300 mb-2">Voice Name</label>
+                                <input type="text" id="url-name" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2.5 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="my-voice">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-300 mb-2">Audio URL</label>
+                                <input type="url" id="url-audio" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2.5 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="https://example.com/voice.wav">
+                            </div>
+                            <button onclick="saveVoiceFromUrl()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 px-4 rounded-lg transition duration-200">
+                                Save
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Clone from YouTube -->
+                    <div class="bg-gray-800 rounded-lg p-6">
+                        <h3 class="text-lg font-semibold mb-4">Clone from YouTube</h3>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-300 mb-2">Voice Name</label>
+                                <input type="text" id="yt-name" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2.5 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="celebrity-voice">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-300 mb-2">YouTube URL</label>
+                                <input type="url" id="yt-url" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2.5 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="https://youtube.com/watch?v=...">
+                            </div>
+                            <div class="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-300 mb-2">Timestamp</label>
+                                    <input type="text" id="yt-timestamp" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2.5 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="1:30">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-300 mb-2">Duration (sec)</label>
+                                    <input type="number" id="yt-duration" value="15" min="5" max="30" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                </div>
+                            </div>
+                            <button onclick="cloneFromYouTube()" id="yt-btn" class="w-full bg-red-600 hover:bg-red-700 text-white font-medium py-2.5 px-4 rounded-lg transition duration-200">
+                                Clone Voice
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="fixed bottom-4 right-4 bg-gray-800 border border-gray-700 text-white px-6 py-4 rounded-lg shadow-lg transform translate-y-full opacity-0 transition-all duration-300 z-50">
+        <p id="toast-message"></p>
+    </div>
+
+    <script>
+        // API Base URL - uses current window location
+        const API_BASE = window.location.origin;
+
+        // State
+        let voices = [];
+        let languages = {};
+        let conversationItems = [];
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            loadModelInfo();
+            loadVoices();
+            loadLanguages();
+            loadTags();
+            addConversationItem(); // Add first item
+        });
+
+        // Tab Navigation
+        function showTab(tabName) {
+            document.querySelectorAll('.tab-panel').forEach(p => p.classList.add('hidden'));
+            document.querySelectorAll('nav button').forEach(b => {
+                b.classList.remove('tab-active');
+                b.classList.add('text-gray-400');
+            });
+            document.getElementById(`panel-${tabName}`).classList.remove('hidden');
+            const tab = document.getElementById(`tab-${tabName}`);
+            tab.classList.add('tab-active');
+            tab.classList.remove('text-gray-400');
+        }
+
+        // Toast Notification
+        function showToast(message, isError = false) {
+            const toast = document.getElementById('toast');
+            const toastMsg = document.getElementById('toast-message');
+            toastMsg.textContent = message;
+            toast.classList.toggle('border-red-500', isError);
+            toast.classList.toggle('border-gray-700', !isError);
+            toast.classList.remove('translate-y-full', 'opacity-0');
+            setTimeout(() => {
+                toast.classList.add('translate-y-full', 'opacity-0');
+            }, 3000);
+        }
+
+        // Load Model Info
+        async function loadModelInfo() {
+            try {
+                const res = await fetch(`${API_BASE}/api/model-info`);
+                const data = await res.json();
+                const info = document.getElementById('model-info');
+                info.innerHTML = `<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${data.cuda_available ? 'bg-green-900 text-green-300' : 'bg-yellow-900 text-yellow-300'}">
+                    ${data.cuda_available ? `GPU: ${data.cuda_device_name}` : 'CPU Mode'}
+                </span>`;
+            } catch (e) {
+                console.error('Failed to load model info:', e);
+            }
+        }
+
+        // Load Voices
+        async function loadVoices() {
+            try {
+                const res = await fetch(`${API_BASE}/api/voices`);
+                const data = await res.json();
+                voices = Object.keys(data.available_voices || {});
+
+                // Update voice dropdown
+                const select = document.getElementById('tts-voice');
+                select.innerHTML = '<option value="">Default Voice</option>';
+                voices.forEach(v => {
+                    select.innerHTML += `<option value="${v}">${v}</option>`;
+                });
+
+                // Update voice list
+                const list = document.getElementById('voice-list');
+                if (voices.length === 0) {
+                    list.innerHTML = '<p class="text-gray-500 text-center py-8">No voices saved yet</p>';
+                } else {
+                    list.innerHTML = voices.map(v => {
+                        const info = data.available_voices[v];
+                        return `
+                            <div class="flex items-center justify-between bg-gray-700 rounded-lg px-4 py-3">
+                                <div>
+                                    <p class="font-medium text-white">${v}</p>
+                                    <p class="text-sm text-gray-400">${info.size_mb} MB</p>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <button onclick="previewVoice('${v}')" class="text-blue-400 hover:text-blue-300 p-2" title="Preview">
+                                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path>
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                        </svg>
+                                    </button>
+                                    <button onclick="deleteVoice('${v}')" class="text-red-400 hover:text-red-300 p-2" title="Delete">
+                                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                                        </svg>
+                                    </button>
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+                }
+
+                updateConversationVoiceDropdowns();
+            } catch (e) {
+                console.error('Failed to load voices:', e);
+            }
+        }
+
+        // Load Languages
+        async function loadLanguages() {
+            try {
+                const res = await fetch(`${API_BASE}/api/languages`);
+                languages = await res.json();
+                const select = document.getElementById('tts-language');
+                select.innerHTML = Object.entries(languages).map(([code, name]) =>
+                    `<option value="${code}">${name} (${code})</option>`
+                ).join('');
+            } catch (e) {
+                console.error('Failed to load languages:', e);
+            }
+        }
+
+        // Load Tags
+        async function loadTags() {
+            try {
+                const res = await fetch(`${API_BASE}/api/tags`);
+                const data = await res.json();
+                const list = document.getElementById('tags-list');
+                list.innerHTML = data.tags.map(tag =>
+                    `<button onclick="insertTag('${tag}')" class="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded-full text-sm text-gray-300 transition">${tag}</button>`
+                ).join('');
+            } catch (e) {
+                console.error('Failed to load tags:', e);
+            }
+        }
+
+        // Insert tag into text
+        function insertTag(tag) {
+            const textarea = document.getElementById('tts-text');
+            const start = textarea.selectionStart;
+            const end = textarea.selectionEnd;
+            const text = textarea.value;
+            textarea.value = text.substring(0, start) + tag + text.substring(end);
+            textarea.focus();
+            textarea.selectionStart = textarea.selectionEnd = start + tag.length;
+        }
+
+        // Model change handler
+        document.getElementById('tts-model').addEventListener('change', function() {
+            const langRow = document.getElementById('language-row');
+            langRow.classList.toggle('hidden', this.value !== 'multilingual');
+        });
+
+        // Generate TTS
+        async function generateTTS() {
+            const btn = document.getElementById('tts-btn');
+            const output = document.getElementById('tts-output');
+
+            const text = document.getElementById('tts-text').value.trim();
+            if (!text) {
+                showToast('Please enter some text', true);
+                return;
+            }
+
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading">Generating...</span>';
+            output.innerHTML = '<div class="text-center py-12"><div class="loading text-gray-400">Generating audio...</div></div>';
+
+            try {
+                const model = document.getElementById('tts-model').value;
+                const res = await fetch(`${API_BASE}/api/tts`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        text,
+                        model,
+                        voice_name: document.getElementById('tts-voice').value || null,
+                        language: model === 'multilingual' ? document.getElementById('tts-language').value : null,
+                        exaggeration: parseFloat(document.getElementById('tts-exaggeration').value),
+                        cfg_weight: parseFloat(document.getElementById('tts-cfg').value)
+                    })
+                });
+
+                const data = await res.json();
+                if (data.status === 'success') {
+                    output.innerHTML = createAudioPlayer(data);
+                    showToast('Audio generated successfully!');
+                } else {
+                    throw new Error(data.message || 'Generation failed');
+                }
+            } catch (e) {
+                output.innerHTML = `<div class="text-red-400 text-center py-12">${e.message}</div>`;
+                showToast(e.message, true);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = 'Generate Speech';
+            }
+        }
+
+        // Create audio player HTML
+        function createAudioPlayer(data) {
+            return `
+                <div class="bg-gray-700 rounded-lg p-4">
+                    <audio controls class="w-full mb-4" src="${data.download_url}"></audio>
+                    <div class="flex items-center justify-between text-sm">
+                        <span class="text-gray-400">${data.filename}</span>
+                        <div class="flex gap-2">
+                            <span class="text-gray-500">${(data.size_bytes / 1024).toFixed(1)} KB</span>
+                            <a href="${data.download_url}" download="${data.filename}" class="text-blue-400 hover:text-blue-300">Download</a>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Conversation Management
+        function addConversationItem() {
+            const id = Date.now();
+            conversationItems.push(id);
+
+            const container = document.getElementById('conversation-items');
+            const div = document.createElement('div');
+            div.id = `conv-item-${id}`;
+            div.className = 'bg-gray-700 rounded-lg p-4 space-y-3';
+            div.innerHTML = `
+                <div class="flex items-center justify-between">
+                    <span class="text-sm text-gray-400">Line ${conversationItems.length}</span>
+                    <button onclick="removeConversationItem(${id})" class="text-red-400 hover:text-red-300">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+                <textarea class="conv-text w-full bg-gray-600 border border-gray-500 rounded-lg px-3 py-2 text-white text-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500" rows="2" placeholder="Enter dialogue..."></textarea>
+                <div class="grid grid-cols-3 gap-2">
+                    <select class="conv-voice bg-gray-600 border border-gray-500 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="">Default</option>
+                        ${voices.map(v => `<option value="${v}">${v}</option>`).join('')}
+                    </select>
+                    <input type="number" class="conv-exag bg-gray-600 border border-gray-500 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" value="0.5" min="0" max="1" step="0.1" placeholder="Exag">
+                    <input type="number" class="conv-cfg bg-gray-600 border border-gray-500 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" value="0.5" min="0" max="1" step="0.1" placeholder="CFG">
+                </div>
+            `;
+            container.appendChild(div);
+        }
+
+        function removeConversationItem(id) {
+            const idx = conversationItems.indexOf(id);
+            if (idx > -1) {
+                conversationItems.splice(idx, 1);
+                document.getElementById(`conv-item-${id}`).remove();
+            }
+        }
+
+        function updateConversationVoiceDropdowns() {
+            document.querySelectorAll('.conv-voice').forEach(select => {
+                const current = select.value;
+                select.innerHTML = '<option value="">Default</option>' + voices.map(v =>
+                    `<option value="${v}" ${v === current ? 'selected' : ''}>${v}</option>`
+                ).join('');
+            });
+        }
+
+        // Generate Conversation
+        async function generateConversation() {
+            const btn = document.getElementById('conv-btn');
+            const output = document.getElementById('conv-output');
+
+            const items = [];
+            conversationItems.forEach(id => {
+                const div = document.getElementById(`conv-item-${id}`);
+                const text = div.querySelector('.conv-text').value.trim();
+                if (text) {
+                    items.push({
+                        text,
+                        voice_name: div.querySelector('.conv-voice').value || null,
+                        exaggeration: parseFloat(div.querySelector('.conv-exag').value) || 0.5,
+                        cfg_weight: parseFloat(div.querySelector('.conv-cfg').value) || 0.5
+                    });
+                }
+            });
+
+            if (items.length === 0) {
+                showToast('Please add at least one dialogue line', true);
+                return;
+            }
+
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading">Generating...</span>';
+            output.innerHTML = '<div class="text-center py-12"><div class="loading text-gray-400">Generating conversation...</div></div>';
+
+            try {
+                const res = await fetch(`${API_BASE}/api/conversation`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        items,
+                        output_name: document.getElementById('conv-output-name').value || null,
+                        silence_between: parseFloat(document.getElementById('conv-silence').value) || 0.4
+                    })
+                });
+
+                const data = await res.json();
+                if (data.status === 'success') {
+                    output.innerHTML = `
+                        ${createAudioPlayer(data)}
+                        <div class="mt-4 text-sm text-gray-400">
+                            Duration: ${data.duration_seconds}s | Clips: ${data.clips_generated}
+                        </div>
+                    `;
+                    showToast('Conversation generated successfully!');
+                } else {
+                    throw new Error(data.message || 'Generation failed');
+                }
+            } catch (e) {
+                output.innerHTML = `<div class="text-red-400 text-center py-12">${e.message}</div>`;
+                showToast(e.message, true);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = 'Generate Conversation';
+            }
+        }
+
+        // Voice Management
+        async function uploadVoice() {
+            const name = document.getElementById('upload-name').value.trim();
+            const fileInput = document.getElementById('upload-file');
+
+            if (!name) {
+                showToast('Please enter a voice name', true);
+                return;
+            }
+            if (!fileInput.files[0]) {
+                showToast('Please select an audio file', true);
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+
+            try {
+                const res = await fetch(`${API_BASE}/upload_voice/${name}`, {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    showToast(`Voice "${name}" uploaded successfully!`);
+                    loadVoices();
+                    document.getElementById('upload-name').value = '';
+                    fileInput.value = '';
+                } else {
+                    throw new Error(data.error || 'Upload failed');
+                }
+            } catch (e) {
+                showToast(e.message, true);
+            }
+        }
+
+        async function saveVoiceFromUrl() {
+            const name = document.getElementById('url-name').value.trim();
+            const url = document.getElementById('url-audio').value.trim();
+
+            if (!name || !url) {
+                showToast('Please enter both name and URL', true);
+                return;
+            }
+
+            try {
+                const res = await fetch(`${API_BASE}/api/voices/save`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, audio_url: url })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    showToast(`Voice "${name}" saved successfully!`);
+                    loadVoices();
+                    document.getElementById('url-name').value = '';
+                    document.getElementById('url-audio').value = '';
+                } else {
+                    throw new Error(data.message || 'Save failed');
+                }
+            } catch (e) {
+                showToast(e.message, true);
+            }
+        }
+
+        async function cloneFromYouTube() {
+            const btn = document.getElementById('yt-btn');
+            const name = document.getElementById('yt-name').value.trim();
+            const url = document.getElementById('yt-url').value.trim();
+            const timestamp = document.getElementById('yt-timestamp').value.trim();
+            const duration = parseInt(document.getElementById('yt-duration').value) || 15;
+
+            if (!name || !url || !timestamp) {
+                showToast('Please fill in all fields', true);
+                return;
+            }
+
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading">Cloning...</span>';
+
+            try {
+                const res = await fetch(`${API_BASE}/api/voices/youtube`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, youtube_url: url, timestamp, duration })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    showToast(`Voice "${name}" cloned successfully!`);
+                    loadVoices();
+                    document.getElementById('yt-name').value = '';
+                    document.getElementById('yt-url').value = '';
+                    document.getElementById('yt-timestamp').value = '';
+                } else {
+                    throw new Error(data.message || 'Clone failed');
+                }
+            } catch (e) {
+                showToast(e.message, true);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = 'Clone Voice';
+            }
+        }
+
+        async function deleteVoice(name) {
+            if (!confirm(`Delete voice "${name}"?`)) return;
+
+            try {
+                const res = await fetch(`${API_BASE}/api/voices/delete`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    showToast(`Voice "${name}" deleted`);
+                    loadVoices();
+                } else {
+                    throw new Error(data.message || 'Delete failed');
+                }
+            } catch (e) {
+                showToast(e.message, true);
+            }
+        }
+
+        async function previewVoice(name) {
+            showToast(`Generating preview for "${name}"...`);
+            try {
+                const res = await fetch(`${API_BASE}/api/tts`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        text: "Hello, this is a preview of my voice.",
+                        voice_name: name,
+                        exaggeration: 0.5,
+                        cfg_weight: 0.5
+                    })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    const audio = new Audio(data.download_url);
+                    audio.play();
+                } else {
+                    throw new Error(data.message);
+                }
+            } catch (e) {
+                showToast(e.message, true);
+            }
+        }
+    </script>
+</body>
+</html>
