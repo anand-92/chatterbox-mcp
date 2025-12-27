@@ -36,8 +36,9 @@ if torch.cuda.is_available():
     print(f"CUDA optimizations enabled for {torch.cuda.get_device_name(0)}")
 from fastmcp.utilities.types import Audio
 from pydantic import Field
-from starlette.responses import FileResponse
+from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Route
+from starlette.middleware.cors import CORSMiddleware
 
 # Output directory for generated audio
 OUTPUT_DIR = Path(r"C:\Users\tazzo\chatterbox-mcp\output")
@@ -1118,6 +1119,116 @@ def get_model_info() -> dict:
     }
 
 
+# =============================================================================
+# REST API Endpoints for Web UI
+# =============================================================================
+
+async def api_text_to_speech(request):
+    """REST API wrapper for text_to_speech tool."""
+    try:
+        data = await request.json()
+        result = text_to_speech(
+            text=data.get("text", ""),
+            model=data.get("model", "standard"),
+            voice_name=data.get("voice_name"),
+            voice_audio_base64=data.get("voice_audio_base64"),
+            language=data.get("language"),
+            exaggeration=float(data.get("exaggeration", 0.5)),
+            cfg_weight=float(data.get("cfg_weight", 0.5))
+        )
+        return JSONResponse(result)
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
+async def api_generate_conversation(request):
+    """REST API wrapper for generate_conversation tool."""
+    try:
+        data = await request.json()
+        result = generate_conversation(
+            items=data.get("items", []),
+            output_name=data.get("output_name"),
+            silence_between=float(data.get("silence_between", 0.4))
+        )
+        return JSONResponse(result)
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
+async def api_list_voices(request):
+    """REST API wrapper for list_voices tool."""
+    try:
+        result = list_voices()
+        return JSONResponse(result)
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
+async def api_save_voice(request):
+    """REST API wrapper for save_voice tool."""
+    try:
+        data = await request.json()
+        result = save_voice(
+            name=data.get("name", ""),
+            audio_url=data.get("audio_url")
+        )
+        return JSONResponse(result)
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
+async def api_delete_voice(request):
+    """REST API wrapper for delete_voice tool."""
+    try:
+        data = await request.json()
+        result = delete_voice(name=data.get("name", ""))
+        return JSONResponse(result)
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
+async def api_clone_voice_from_youtube(request):
+    """REST API wrapper for clone_voice_from_youtube tool."""
+    try:
+        data = await request.json()
+        result = clone_voice_from_youtube(
+            name=data.get("name", ""),
+            youtube_url=data.get("youtube_url", ""),
+            timestamp=data.get("timestamp", "0:00"),
+            duration=int(data.get("duration", 15))
+        )
+        return JSONResponse(result)
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
+async def api_list_languages(request):
+    """REST API wrapper for list_supported_languages tool."""
+    try:
+        result = list_supported_languages()
+        return JSONResponse(result)
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
+async def api_list_tags(request):
+    """REST API wrapper for list_paralinguistic_tags tool."""
+    try:
+        result = list_paralinguistic_tags()
+        return JSONResponse(result)
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
+async def api_model_info(request):
+    """REST API wrapper for get_model_info tool."""
+    try:
+        result = get_model_info()
+        return JSONResponse(result)
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
 if __name__ == "__main__":
     import socket
 
@@ -1178,13 +1289,29 @@ if __name__ == "__main__":
             "usage": f"text_to_speech(text='Your text', voice_name='{safe_name}')"
         })
 
-    # Get the underlying Starlette app and add our route
+    # Get the underlying Starlette app and add our routes
     from starlette.routing import Route
     download_route = Route("/download/{filename}", download_audio)
     upload_route = Route("/upload_voice/{voice_name}", upload_voice, methods=["POST"])
 
+    # REST API routes for Web UI
+    api_routes = [
+        Route("/api/tts", api_text_to_speech, methods=["POST"]),
+        Route("/api/conversation", api_generate_conversation, methods=["POST"]),
+        Route("/api/voices", api_list_voices, methods=["GET"]),
+        Route("/api/voices/save", api_save_voice, methods=["POST"]),
+        Route("/api/voices/delete", api_delete_voice, methods=["POST"]),
+        Route("/api/voices/youtube", api_clone_voice_from_youtube, methods=["POST"]),
+        Route("/api/languages", api_list_languages, methods=["GET"]),
+        Route("/api/tags", api_list_tags, methods=["GET"]),
+        Route("/api/model-info", api_model_info, methods=["GET"]),
+    ]
+
     print(f"Download URL: http://{local_ip}:8765/download/<filename>")
     print(f"Upload URL:   curl -X POST 'http://{local_ip}:8765/upload_voice/<name>' -F 'file=@audio.wav'")
+    print("-" * 60)
+    print(f"Web UI:       http://{local_ip}:8765/ui/")
+    print(f"              http://127.0.0.1:8765/ui/")
     print("=" * 60)
 
     # Run server on all interfaces so it's accessible from other machines
@@ -1193,16 +1320,31 @@ if __name__ == "__main__":
     from starlette.applications import Starlette
     from starlette.routing import Mount
 
-    # Create a custom app that includes MCP, download, and upload routes
+    # Serve static UI files
+    from starlette.staticfiles import StaticFiles
+    ui_dir = Path(__file__).parent / "ui"
+    ui_dir.mkdir(exist_ok=True)
+
+    # Create a custom app that includes MCP, API, download, and upload routes
     # IMPORTANT: Must pass lifespan from MCP app for proper initialization
     mcp_http_app = mcp.http_app()
     app = Starlette(
         routes=[
             download_route,
             upload_route,
+            *api_routes,
+            Mount("/ui", app=StaticFiles(directory=str(ui_dir), html=True), name="ui"),
             Mount("/", app=mcp_http_app),
         ],
         lifespan=mcp_http_app.lifespan,
+    )
+
+    # Add CORS middleware for web UI
+    app = CORSMiddleware(
+        app,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
     uvicorn.run(app, host="0.0.0.0", port=8765, ws="wsproto")
