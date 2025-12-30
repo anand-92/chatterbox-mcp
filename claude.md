@@ -2,6 +2,11 @@
 
 A FastMCP server exposing Chatterbox TTS capabilities for remote text-to-speech generation with voice cloning.
 
+## Hardware
+
+- **GPU**: NVIDIA RTX 5090 (32GB VRAM)
+- Easily handles 3+ concurrent model instances (~2GB each for 500M param models)
+
 ## Architecture
 
 - **server.py** - Main MCP server with TTS tools, REST API, and Web UI
@@ -21,27 +26,35 @@ A FastMCP server exposing Chatterbox TTS capabilities for remote text-to-speech 
 - Clone from: saved voices, base64 audio, YouTube videos
 
 ### Concurrency
-- Model pool (`_pool_size=2`) for parallel batch processing
-- Thread-safe voice conditionals cache with `_voice_cache_lock`
-- Uses `ThreadPoolExecutor` for concurrent TTS generation
+- All MCP tools and REST API handlers are async with `asyncio.to_thread()` for non-blocking concurrent request handling
+- Model pool (`_pool_size=3`) provides thread-safe access to model instances
+- Standard/turbo models use the pool; each concurrent request gets its own model instance
+- Thread-safe model loading with double-checked locking (`_models_lock`, `_pool_lock`)
+- Voice conditionals cache with `_voice_cache_lock` for thread-safe caching
+- Uses `ThreadPoolExecutor` for batch/conversation parallel generation
 
 ## Code Patterns
 
 ### Adding New MCP Tools
 ```python
+def _new_tool_impl(param: str) -> dict:
+    """Core implementation (runs in thread pool)."""
+    # Do blocking work here
+    return {"status": "success", ...}
+
 @mcp.tool
-def new_tool(
+async def new_tool(
     param: str = Field(description="Parameter description")
 ) -> dict:
     """Tool docstring shown to LLM."""
-    return {"status": "success", ...}
+    return await asyncio.to_thread(_new_tool_impl, param)
 ```
 
 ### Adding REST API Endpoints
 ```python
 async def api_new_endpoint(request):
     data = await request.json()
-    result = new_tool(**data)
+    result = await asyncio.to_thread(_new_tool_impl, **data)
     return JSONResponse(result)
 
 # Add route in __main__:

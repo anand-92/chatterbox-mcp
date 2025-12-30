@@ -17,6 +17,8 @@ import tempfile
 import os
 import time
 import re
+import asyncio
+import threading
 from pathlib import Path
 from typing import Optional, Literal, List
 
@@ -50,6 +52,16 @@ VOICES_DIR.mkdir(exist_ok=True)
 
 # Server port
 SERVER_PORT = 8765
+
+# Public URL for when running behind a tunnel (e.g., Cloudflare Tunnel)
+# Set to None to use local IP, or set to your public domain
+PUBLIC_URL = "https://mcp.thethirdroom.xyz"
+
+def get_base_url():
+    """Get the base URL for download links."""
+    if PUBLIC_URL:
+        return PUBLIC_URL
+    return f"http://{SERVER_IP}:{SERVER_PORT}"
 
 def get_lan_ip():
     """Get the LAN IP address (prefer 192.168.x.x or 10.x.x.x ranges)."""
@@ -204,14 +216,15 @@ When user wants voice cloning:
 """
 )
 
-# Global model cache (single instance for non-batch use)
+# Global model cache (for multilingual model which isn't pooled)
 _models = {}
+_models_lock = threading.Lock()
 
-# Model pool for concurrent batch processing (each thread gets its own model)
-import threading
+# Model pool for concurrent processing (each thread gets its own model)
 from queue import Queue
 _model_pool = None
-_pool_size = 2  # 2 instances - reduces VRAM bandwidth contention on parallel requests
+_pool_lock = threading.Lock()
+_pool_size = 3  # RTX 5090 (32GB VRAM) can handle 3+ instances of 500M param model (~2GB each)
 
 # Voice conditionals cache - avoids expensive CPU librosa preprocessing for each generation
 # Key: (voice_path, mtime) -> Value: Conditionals object (GPU tensors)
@@ -236,8 +249,17 @@ LOCAL_MODEL_PATHS = {
 }
 
 def get_model(model_type: str = "standard"):
-    """Lazily load and cache models."""
-    if model_type not in _models:
+    """Lazily load and cache models (thread-safe). Used for multilingual model."""
+    # Fast path - check without lock first
+    if model_type in _models:
+        return _models[model_type]
+
+    # Slow path - acquire lock for loading
+    with _models_lock:
+        # Double-check after acquiring lock
+        if model_type in _models:
+            return _models[model_type]
+
         device = "cuda" if torch.cuda.is_available() else "cpu"
         print(f"Loading {model_type} model on {device}...")
 
@@ -295,14 +317,24 @@ def get_cached_conditionals(model, voice_path: str, exaggeration: float = 0.5):
 
 
 def get_model_pool():
-    """Get or initialize the model pool for concurrent batch processing."""
+    """Get or initialize the model pool for concurrent processing (thread-safe)."""
     global _model_pool
-    if _model_pool is None:
+
+    # Fast path - pool already initialized
+    if _model_pool is not None:
+        return _model_pool
+
+    # Slow path - acquire lock for initialization
+    with _pool_lock:
+        # Double-check after acquiring lock
+        if _model_pool is not None:
+            return _model_pool
+
         from chatterbox.tts import ChatterboxTTS
         device = "cuda" if torch.cuda.is_available() else "cpu"
         local_path = LOCAL_MODEL_PATHS.get("standard")
 
-        print(f"Initializing model pool with {_pool_size} instances...")
+        print(f"Initializing model pool with {_pool_size} instances (RTX 5090 - 32GB VRAM)...")
         _model_pool = Queue()
         for i in range(_pool_size):
             print(f"  Loading model instance {i+1}/{_pool_size}...")
@@ -420,47 +452,16 @@ def concatenate_audio_tensors(tensors: List[torch.Tensor], sample_rate: int, sil
     return torch.cat(result_parts, dim=1)
 
 
-@mcp.tool
-def text_to_speech(
-    text: str = Field(description="The text to convert to speech. Supports paralinguistic tags like [laugh], [cough], [chuckle] with turbo model."),
-    model: Literal["standard", "multilingual"] = Field(
-        default="standard",
-        description="Model to use: 'standard' (English, CFG controls), 'multilingual' (23+ languages)"
-    ),
-    voice_name: Optional[str] = Field(
-        default=None,
-        description="Name of a saved voice to clone. Use list_voices() to see available voices. Takes priority over voice_audio_base64."
-    ),
-    voice_audio_base64: Optional[str] = Field(
-        default=None,
-        description="Base64-encoded WAV audio for voice cloning. Should be 5-15 seconds of clear speech. Prefer using voice_name instead."
-    ),
-    language: Optional[str] = Field(
-        default=None,
-        description="Language code for multilingual model (e.g., 'en', 'fr', 'es', 'de', 'zh', 'ja'). Only used with multilingual model."
-    ),
-    exaggeration: float = Field(
-        default=0.5,
-        description="Exaggeration level (0.0-1.0). Higher = more expressive. Only for standard/multilingual models."
-    ),
-    cfg_weight: float = Field(
-        default=0.5,
-        description="CFG weight (0.0-1.0). Lower = slower, more deliberate speech. Only for standard/multilingual models."
-    )
-) -> Audio:
-    """
-    Generate speech from text using Chatterbox TTS.
-
-    Returns a WAV audio file that can be saved locally.
-
-    For voice cloning, provide a voice_name (recommended) or base64-encoded WAV.
-
-    Examples:
-    - Basic TTS: text_to_speech(text="Hello, world!")
-    - Voice cloning: text_to_speech(text="Hello", voice_name="david")
-    - Multilingual: text_to_speech(text="Bonjour!", model="multilingual", language="fr")
-    """
-    tts_model = get_model(model)
+def _text_to_speech_impl(
+    text: str,
+    model: str = "standard",
+    voice_name: Optional[str] = None,
+    voice_audio_base64: Optional[str] = None,
+    language: Optional[str] = None,
+    exaggeration: float = 0.5,
+    cfg_weight: float = 0.5
+) -> dict:
+    """Core implementation for text-to-speech generation (thread-safe via model pool)."""
 
     # Handle voice cloning reference audio
     audio_prompt_path = None
@@ -485,6 +486,17 @@ def text_to_speech(
         temp_file.write(audio_bytes)
         temp_file.close()
         audio_prompt_path = temp_file.name
+
+    # Use model pool for standard model (thread-safe), shared instance for multilingual
+    use_pool = model in ("standard", "turbo")
+    model_pool = None
+    tts_model = None
+
+    if use_pool:
+        model_pool = get_model_pool()
+        tts_model = model_pool.get()  # Blocks until a model is available
+    else:
+        tts_model = get_model(model)
 
     try:
         # Build generation kwargs
@@ -539,15 +551,62 @@ def text_to_speech(
         return {
             "status": "success",
             "filename": filename,
-            "download_url": f"http://{SERVER_IP}:{SERVER_PORT}/download/{filename}",
+            "download_url": f"{get_base_url()}/download/{filename}",
             "size_bytes": len(audio_bytes),
             "message": "Use curl to download the file from download_url"
         }
 
     finally:
+        # Return model to pool if we borrowed one
+        if use_pool and model_pool is not None and tts_model is not None:
+            model_pool.put(tts_model)
+
         # Clean up temp file
         if temp_file and os.path.exists(temp_file.name):
             os.unlink(temp_file.name)
+
+
+@mcp.tool
+async def text_to_speech(
+    text: str = Field(description="The text to convert to speech. Supports paralinguistic tags like [laugh], [cough], [chuckle] with turbo model."),
+    model: Literal["standard", "multilingual"] = Field(
+        default="standard",
+        description="Model to use: 'standard' (English, CFG controls), 'multilingual' (23+ languages)"
+    ),
+    voice_name: Optional[str] = Field(
+        default=None,
+        description="Name of a saved voice to clone. Use list_voices() to see available voices. Takes priority over voice_audio_base64."
+    ),
+    voice_audio_base64: Optional[str] = Field(
+        default=None,
+        description="Base64-encoded WAV audio for voice cloning. Should be 5-15 seconds of clear speech. Prefer using voice_name instead."
+    ),
+    language: Optional[str] = Field(
+        default=None,
+        description="Language code for multilingual model (e.g., 'en', 'fr', 'es', 'de', 'zh', 'ja'). Only used with multilingual model."
+    ),
+    exaggeration: float = Field(
+        default=0.5,
+        description="Exaggeration level (0.0-1.0). Higher = more expressive. Only for standard/multilingual models."
+    ),
+    cfg_weight: float = Field(
+        default=0.5,
+        description="CFG weight (0.0-1.0). Lower = slower, more deliberate speech. Only for standard/multilingual models."
+    )
+) -> Audio:
+    """
+    Generate speech from text using Chatterbox TTS.
+
+    Returns a WAV audio file that can be saved locally.
+
+    For voice cloning, provide a voice_name (recommended) or base64-encoded WAV.
+
+    Examples:
+    - Basic TTS: text_to_speech(text="Hello, world!")
+    - Voice cloning: text_to_speech(text="Hello", voice_name="david")
+    - Multilingual: text_to_speech(text="Bonjour!", model="multilingual", language="fr")
+    """
+    return await asyncio.to_thread(_text_to_speech_impl, text, model, voice_name, voice_audio_base64, language, exaggeration, cfg_weight)
 
 
 def _generate_single_pooled(item: dict, model_pool: Queue, sample_rate: int) -> dict:
@@ -601,7 +660,7 @@ def _generate_single_pooled(item: dict, model_pool: Queue, sample_rate: int) -> 
 
         return {
             "filename": filename,
-            "download_url": f"http://{SERVER_IP}:{SERVER_PORT}/download/{filename}",
+            "download_url": f"{get_base_url()}/download/{filename}",
             "size_bytes": len(audio_bytes),
         }
     finally:
@@ -609,28 +668,8 @@ def _generate_single_pooled(item: dict, model_pool: Queue, sample_rate: int) -> 
         model_pool.put(tts_model)
 
 
-@mcp.tool
-def batch_text_to_speech(
-    items: List[dict] = Field(description="List of TTS items. Each item should have: text (required), voice_name (optional), exaggeration (optional, default 0.5), cfg_weight (optional, default 0.5)")
-) -> dict:
-    """
-    Generate multiple TTS clips in parallel for faster batch processing.
-
-    Perfect for conversations or multiple clips. Uses concurrent processing
-    to maximize GPU utilization on high-VRAM cards like RTX 5090.
-
-    Each item in the list should be a dict with:
-    - text: The text to speak (required)
-    - voice_name: Name of voice to use (optional)
-    - exaggeration: 0.0-1.0 (optional, default 0.5)
-    - cfg_weight: 0.0-1.0 (optional, default 0.5)
-
-    Example:
-    batch_text_to_speech(items=[
-        {"text": "Hello from Trump", "voice_name": "trump", "exaggeration": 0.85},
-        {"text": "Hello from Elon", "voice_name": "elon", "exaggeration": 0.75}
-    ])
-    """
+def _batch_text_to_speech_impl(items: List[dict]) -> dict:
+    """Core implementation for batch text-to-speech."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     if not items:
@@ -682,6 +721,31 @@ def batch_text_to_speech(
     }
 
 
+@mcp.tool
+async def batch_text_to_speech(
+    items: List[dict] = Field(description="List of TTS items. Each item should have: text (required), voice_name (optional), exaggeration (optional, default 0.5), cfg_weight (optional, default 0.5)")
+) -> dict:
+    """
+    Generate multiple TTS clips in parallel for faster batch processing.
+
+    Perfect for conversations or multiple clips. Uses concurrent processing
+    to maximize GPU utilization on high-VRAM cards like RTX 5090.
+
+    Each item in the list should be a dict with:
+    - text: The text to speak (required)
+    - voice_name: Name of voice to use (optional)
+    - exaggeration: 0.0-1.0 (optional, default 0.5)
+    - cfg_weight: 0.0-1.0 (optional, default 0.5)
+
+    Example:
+    batch_text_to_speech(items=[
+        {"text": "Hello from Trump", "voice_name": "trump", "exaggeration": 0.85},
+        {"text": "Hello from Elon", "voice_name": "elon", "exaggeration": 0.75}
+    ])
+    """
+    return await asyncio.to_thread(_batch_text_to_speech_impl, items)
+
+
 def _generate_single_tensor(item: dict, model_pool: Queue, sample_rate: int) -> torch.Tensor:
     """Generate a single TTS clip and return the audio tensor (not saved to file)."""
     tts_model = model_pool.get()
@@ -721,25 +785,12 @@ def _generate_single_tensor(item: dict, model_pool: Queue, sample_rate: int) -> 
         model_pool.put(tts_model)
 
 
-@mcp.tool
-def generate_conversation(
-    items: List[dict] = Field(description="List of dialogue items. Each: {text, voice_name, exaggeration (0.5), cfg_weight (0.5)}"),
-    output_name: Optional[str] = Field(default=None, description="Output filename (without .wav). Auto-generated if not provided."),
-    silence_between: float = Field(default=0.4, description="Seconds of silence between clips (default 0.4)")
+def _generate_conversation_impl(
+    items: List[dict],
+    output_name: Optional[str] = None,
+    silence_between: float = 0.4
 ) -> dict:
-    """
-    Generate a multi-voice conversation and return a single combined audio file.
-
-    Perfect for podcasts, dialogues, or any multi-speaker content.
-    Generates all clips in parallel, then stitches them together server-side.
-
-    Example:
-    generate_conversation(items=[
-        {"text": "Welcome to the show!", "voice_name": "trump", "exaggeration": 0.6},
-        {"text": "Thanks for having me.", "voice_name": "kobe", "exaggeration": 0.5},
-        {"text": "Let's talk about basketball.", "voice_name": "trump", "exaggeration": 0.6},
-    ], output_name="podcast_episode_1")
-    """
+    """Core implementation for generating a conversation."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     if not items:
@@ -803,7 +854,7 @@ def generate_conversation(
     return {
         "status": "success",
         "filename": filename,
-        "download_url": f"http://{SERVER_IP}:{SERVER_PORT}/download/{filename}",
+        "download_url": f"{get_base_url()}/download/{filename}",
         "size_bytes": len(audio_bytes),
         "duration_seconds": round(duration_seconds, 2),
         "clips_generated": len(items)
@@ -811,13 +862,29 @@ def generate_conversation(
 
 
 @mcp.tool
-def list_voices() -> dict:
+async def generate_conversation(
+    items: List[dict] = Field(description="List of dialogue items. Each: {text, voice_name, exaggeration (0.5), cfg_weight (0.5)}"),
+    output_name: Optional[str] = Field(default=None, description="Output filename (without .wav). Auto-generated if not provided."),
+    silence_between: float = Field(default=0.4, description="Seconds of silence between clips (default 0.4)")
+) -> dict:
     """
-    List all saved voices available for voice cloning.
+    Generate a multi-voice conversation and return a single combined audio file.
 
-    Returns a dictionary with voice names and their file info.
-    Use these names with the voice_name parameter in text_to_speech.
+    Perfect for podcasts, dialogues, or any multi-speaker content.
+    Generates all clips in parallel, then stitches them together server-side.
+
+    Example:
+    generate_conversation(items=[
+        {"text": "Welcome to the show!", "voice_name": "trump", "exaggeration": 0.6},
+        {"text": "Thanks for having me.", "voice_name": "kobe", "exaggeration": 0.5},
+        {"text": "Let's talk about basketball.", "voice_name": "trump", "exaggeration": 0.6},
+    ], output_name="podcast_episode_1")
     """
+    return await asyncio.to_thread(_generate_conversation_impl, items, output_name, silence_between)
+
+
+def _list_voices_impl() -> dict:
+    """Core implementation for listing voices."""
     voices = {}
     for voice_file in VOICES_DIR.glob("*.wav"):
         stat = voice_file.stat()
@@ -835,27 +902,22 @@ def list_voices() -> dict:
 
 
 @mcp.tool
-def save_voice(
-    name: str = Field(description="Name for the voice (will be saved as name.wav)"),
-    audio_url: Optional[str] = Field(default=None, description="URL to download the voice audio from"),
-) -> dict:
+async def list_voices() -> dict:
     """
-    Save a voice reference audio for later use in voice cloning.
+    List all saved voices available for voice cloning.
 
-    For best performance, use the HTTP upload endpoint instead:
-        curl -X POST "http://<server-ip>:8765/upload_voice/name" -F "file=@audio.wav"
-
-    Or provide audio_url to download from a URL.
-    The audio should be 5-15 seconds of clear speech.
-
-    Examples:
-    - save_voice(name="david", audio_url="http://example.com/voice.wav")
-    - Or use curl: curl -X POST "http://<server-ip>:8765/upload_voice/david" -F "file=@voice.wav"
+    Returns a dictionary with voice names and their file info.
+    Use these names with the voice_name parameter in text_to_speech.
     """
+    return await asyncio.to_thread(_list_voices_impl)
+
+
+def _save_voice_impl(name: str, audio_url: Optional[str] = None) -> dict:
+    """Core implementation for saving a voice."""
     import urllib.request
 
     if not audio_url:
-        raise ValueError(f"Must provide audio_url, or use the HTTP upload endpoint: curl -X POST 'http://{SERVER_IP}:{SERVER_PORT}/upload_voice/name' -F 'file=@audio.wav'")
+        raise ValueError(f"Must provide audio_url, or use the HTTP upload endpoint: curl -X POST '{get_base_url()}/upload_voice/name' -F 'file=@audio.wav'")
 
     # Sanitize name
     safe_name = "".join(c for c in name if c.isalnum() or c in "-_").lower()
@@ -878,12 +940,28 @@ def save_voice(
 
 
 @mcp.tool
-def delete_voice(
-    name: str = Field(description="Name of the voice to delete")
+async def save_voice(
+    name: str = Field(description="Name for the voice (will be saved as name.wav)"),
+    audio_url: Optional[str] = Field(default=None, description="URL to download the voice audio from"),
 ) -> dict:
     """
-    Delete a saved voice from the voices directory.
+    Save a voice reference audio for later use in voice cloning.
+
+    For best performance, use the HTTP upload endpoint instead:
+        curl -X POST "http://<server-ip>:8765/upload_voice/name" -F "file=@audio.wav"
+
+    Or provide audio_url to download from a URL.
+    The audio should be 5-15 seconds of clear speech.
+
+    Examples:
+    - save_voice(name="david", audio_url="http://example.com/voice.wav")
+    - Or use curl: curl -X POST "http://<server-ip>:8765/upload_voice/david" -F "file=@voice.wav"
     """
+    return await asyncio.to_thread(_save_voice_impl, name, audio_url)
+
+
+def _delete_voice_impl(name: str) -> dict:
+    """Core implementation for deleting a voice."""
     voice_file = VOICES_DIR / f"{name}.wav"
     if not voice_file.exists():
         available = [f.stem for f in VOICES_DIR.glob("*.wav")]
@@ -898,22 +976,17 @@ def delete_voice(
 
 
 @mcp.tool
-def clone_voice_from_youtube(
-    name: str = Field(description="Name for the voice (e.g., 'draymond', 'kobe')"),
-    youtube_url: str = Field(description="YouTube video URL"),
-    timestamp: str = Field(description="Start timestamp in MM:SS or HH:MM:SS format (e.g., '5:10' or '1:23:45')"),
-    duration: int = Field(default=15, description="Duration in seconds to extract (default: 15, recommended: 10-15)")
+async def delete_voice(
+    name: str = Field(description="Name of the voice to delete")
 ) -> dict:
     """
-    Clone a voice directly from a YouTube video.
-
-    Downloads the audio, extracts a clip at the specified timestamp, and saves it as a voice.
-    Much faster than manual download/upload workflow.
-
-    Examples:
-    - clone_voice_from_youtube(name="draymond", youtube_url="https://youtube.com/watch?v=xxx", timestamp="5:10")
-    - clone_voice_from_youtube(name="kobe", youtube_url="https://youtu.be/xxx", timestamp="14:20", duration=12)
+    Delete a saved voice from the voices directory.
     """
+    return await asyncio.to_thread(_delete_voice_impl, name)
+
+
+def _clone_voice_from_youtube_impl(name: str, youtube_url: str, timestamp: str, duration: int = 15) -> dict:
+    """Core implementation for cloning a voice from YouTube."""
     import subprocess
     import shutil
 
@@ -1011,12 +1084,27 @@ def clone_voice_from_youtube(
 
 
 @mcp.tool
-def list_supported_languages() -> dict:
+async def clone_voice_from_youtube(
+    name: str = Field(description="Name for the voice (e.g., 'draymond', 'kobe')"),
+    youtube_url: str = Field(description="YouTube video URL"),
+    timestamp: str = Field(description="Start timestamp in MM:SS or HH:MM:SS format (e.g., '5:10' or '1:23:45')"),
+    duration: int = Field(default=15, description="Duration in seconds to extract (default: 15, recommended: 10-15)")
+) -> dict:
     """
-    List all languages supported by the multilingual model.
+    Clone a voice directly from a YouTube video.
 
-    Returns a dictionary mapping language codes to language names.
+    Downloads the audio, extracts a clip at the specified timestamp, and saves it as a voice.
+    Much faster than manual download/upload workflow.
+
+    Examples:
+    - clone_voice_from_youtube(name="draymond", youtube_url="https://youtube.com/watch?v=xxx", timestamp="5:10")
+    - clone_voice_from_youtube(name="kobe", youtube_url="https://youtu.be/xxx", timestamp="14:20", duration=12)
     """
+    return await asyncio.to_thread(_clone_voice_from_youtube_impl, name, youtube_url, timestamp, duration)
+
+
+def _list_supported_languages_impl() -> dict:
+    """Core implementation for listing supported languages."""
     return {
         "ar": "Arabic",
         "da": "Danish",
@@ -1045,13 +1133,17 @@ def list_supported_languages() -> dict:
 
 
 @mcp.tool
-def list_paralinguistic_tags() -> dict:
+async def list_supported_languages() -> dict:
     """
-    List paralinguistic tags supported by the turbo model.
+    List all languages supported by the multilingual model.
 
-    These tags can be embedded in text to add expressiveness.
-    Example: "That's so funny! [laugh]"
+    Returns a dictionary mapping language codes to language names.
     """
+    return await asyncio.to_thread(_list_supported_languages_impl)
+
+
+def _list_paralinguistic_tags_impl() -> dict:
+    """Core implementation for listing paralinguistic tags."""
     return {
         "tags": [
             "[laugh]",
@@ -1069,10 +1161,18 @@ def list_paralinguistic_tags() -> dict:
 
 
 @mcp.tool
-def get_model_info() -> dict:
+async def list_paralinguistic_tags() -> dict:
     """
-    Get information about available TTS models and their capabilities.
+    List paralinguistic tags supported by the turbo model.
+
+    These tags can be embedded in text to add expressiveness.
+    Example: "That's so funny! [laugh]"
     """
+    return await asyncio.to_thread(_list_paralinguistic_tags_impl)
+
+
+def _get_model_info_impl() -> dict:
+    """Core implementation for getting model info."""
     device = "cuda" if torch.cuda.is_available() else "cpu"
     cuda_available = torch.cuda.is_available()
 
@@ -1119,6 +1219,14 @@ def get_model_info() -> dict:
     }
 
 
+@mcp.tool
+async def get_model_info() -> dict:
+    """
+    Get information about available TTS models and their capabilities.
+    """
+    return await asyncio.to_thread(_get_model_info_impl)
+
+
 # =============================================================================
 # REST API Endpoints for Web UI
 # =============================================================================
@@ -1127,7 +1235,8 @@ async def api_text_to_speech(request):
     """REST API wrapper for text_to_speech tool."""
     try:
         data = await request.json()
-        result = text_to_speech(
+        result = await asyncio.to_thread(
+            _text_to_speech_impl,
             text=data.get("text", ""),
             model=data.get("model", "standard"),
             voice_name=data.get("voice_name"),
@@ -1145,7 +1254,8 @@ async def api_generate_conversation(request):
     """REST API wrapper for generate_conversation tool."""
     try:
         data = await request.json()
-        result = generate_conversation(
+        result = await asyncio.to_thread(
+            _generate_conversation_impl,
             items=data.get("items", []),
             output_name=data.get("output_name"),
             silence_between=float(data.get("silence_between", 0.4))
@@ -1158,7 +1268,7 @@ async def api_generate_conversation(request):
 async def api_list_voices(request):
     """REST API wrapper for list_voices tool."""
     try:
-        result = list_voices()
+        result = await asyncio.to_thread(_list_voices_impl)
         return JSONResponse(result)
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
@@ -1168,7 +1278,8 @@ async def api_save_voice(request):
     """REST API wrapper for save_voice tool."""
     try:
         data = await request.json()
-        result = save_voice(
+        result = await asyncio.to_thread(
+            _save_voice_impl,
             name=data.get("name", ""),
             audio_url=data.get("audio_url")
         )
@@ -1181,7 +1292,7 @@ async def api_delete_voice(request):
     """REST API wrapper for delete_voice tool."""
     try:
         data = await request.json()
-        result = delete_voice(name=data.get("name", ""))
+        result = await asyncio.to_thread(_delete_voice_impl, name=data.get("name", ""))
         return JSONResponse(result)
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
@@ -1191,7 +1302,8 @@ async def api_clone_voice_from_youtube(request):
     """REST API wrapper for clone_voice_from_youtube tool."""
     try:
         data = await request.json()
-        result = clone_voice_from_youtube(
+        result = await asyncio.to_thread(
+            _clone_voice_from_youtube_impl,
             name=data.get("name", ""),
             youtube_url=data.get("youtube_url", ""),
             timestamp=data.get("timestamp", "0:00"),
@@ -1205,7 +1317,7 @@ async def api_clone_voice_from_youtube(request):
 async def api_list_languages(request):
     """REST API wrapper for list_supported_languages tool."""
     try:
-        result = list_supported_languages()
+        result = await asyncio.to_thread(_list_supported_languages_impl)
         return JSONResponse(result)
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
@@ -1214,7 +1326,7 @@ async def api_list_languages(request):
 async def api_list_tags(request):
     """REST API wrapper for list_paralinguistic_tags tool."""
     try:
-        result = list_paralinguistic_tags()
+        result = await asyncio.to_thread(_list_paralinguistic_tags_impl)
         return JSONResponse(result)
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
@@ -1223,7 +1335,7 @@ async def api_list_tags(request):
 async def api_model_info(request):
     """REST API wrapper for get_model_info tool."""
     try:
-        result = get_model_info()
+        result = await asyncio.to_thread(_get_model_info_impl)
         return JSONResponse(result)
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
