@@ -686,10 +686,10 @@ def _batch_text_to_speech_impl(items: List[dict]) -> dict:
     results = []
     errors = []
 
-    # Use pool size as max workers (each worker gets its own model)
-    max_workers = min(len(items), _pool_size)
+    # Sequential processing is faster than parallel on single GPU due to CUDA contention
+    max_workers = 1
 
-    print(f"Batch processing {len(items)} items with {max_workers} workers (pool of {_pool_size} models)...")
+    print(f"Batch processing {len(items)} items sequentially...")
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_idx = {
@@ -803,8 +803,9 @@ def _generate_conversation_impl(
     sample_rate = temp_model.sr
     model_pool.put(temp_model)
 
-    max_workers = min(len(items), _pool_size)
-    print(f"Generating conversation: {len(items)} clips with {max_workers} workers...")
+    # Sequential processing is faster than parallel on single GPU due to CUDA contention
+    max_workers = 1
+    print(f"Generating conversation: {len(items)} clips sequentially...")
 
     # Generate all clips in parallel, keeping track of order
     tensors_by_idx = {}
