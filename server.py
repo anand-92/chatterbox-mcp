@@ -134,21 +134,14 @@ curl -s "<download_url>" -o output.wav
 
 ## Available Models
 
-### 1. turbo (DEFAULT - recommended for most uses)
-- Fastest generation, lowest VRAM usage
-- English only
-- Supports paralinguistic tags for expressive speech:
-  - [laugh], [chuckle], [cough], [sigh], [gasp], [groan], [yawn], [clearing throat]
-- Example: `text_to_speech(text="That's hilarious! [laugh] I can't believe it.")`
-
-### 2. standard
+### 1. standard (DEFAULT)
 - Original Chatterbox model, English only
-- More control via `exaggeration` (0.0-1.0) and `cfg_weight` (0.0-1.0)
+- Control via `exaggeration` (0.0-1.0) and `cfg_weight` (0.0-1.0)
 - Higher exaggeration = more expressive/dramatic
 - Lower cfg_weight = slower, more deliberate pacing
-- Example: `text_to_speech(text="...", model="standard", exaggeration=0.7, cfg_weight=0.3)`
+- Example: `text_to_speech(text="...", exaggeration=0.7, cfg_weight=0.3)`
 
-### 3. multilingual
+### 2. multilingual
 - Supports 23 languages: ar, da, de, el, en, es, fi, fr, he, hi, it, ja, ko, ms, nl, no, pl, pt, ru, sv, sw, tr, zh
 - Must specify `language` parameter
 - Example: `text_to_speech(text="Bonjour, comment allez-vous?", model="multilingual", language="fr")`
@@ -568,7 +561,7 @@ def _text_to_speech_impl(
 
 @mcp.tool
 async def text_to_speech(
-    text: str = Field(description="The text to convert to speech. Supports paralinguistic tags like [laugh], [cough], [chuckle] with turbo model."),
+    text: str = Field(description="The text to convert to speech."),
     model: Literal["standard", "multilingual"] = Field(
         default="standard",
         description="Model to use: 'standard' (English, CFG controls), 'multilingual' (23+ languages)"
@@ -1104,130 +1097,6 @@ async def clone_voice_from_youtube(
     return await asyncio.to_thread(_clone_voice_from_youtube_impl, name, youtube_url, timestamp, duration)
 
 
-def _list_supported_languages_impl() -> dict:
-    """Core implementation for listing supported languages."""
-    return {
-        "ar": "Arabic",
-        "da": "Danish",
-        "de": "German",
-        "el": "Greek",
-        "en": "English",
-        "es": "Spanish",
-        "fi": "Finnish",
-        "fr": "French",
-        "he": "Hebrew",
-        "hi": "Hindi",
-        "it": "Italian",
-        "ja": "Japanese",
-        "ko": "Korean",
-        "ms": "Malay",
-        "nl": "Dutch",
-        "no": "Norwegian",
-        "pl": "Polish",
-        "pt": "Portuguese",
-        "ru": "Russian",
-        "sv": "Swedish",
-        "sw": "Swahili",
-        "tr": "Turkish",
-        "zh": "Chinese"
-    }
-
-
-@mcp.tool
-async def list_supported_languages() -> dict:
-    """
-    List all languages supported by the multilingual model.
-
-    Returns a dictionary mapping language codes to language names.
-    """
-    return await asyncio.to_thread(_list_supported_languages_impl)
-
-
-def _list_paralinguistic_tags_impl() -> dict:
-    """Core implementation for listing paralinguistic tags."""
-    return {
-        "tags": [
-            "[laugh]",
-            "[chuckle]",
-            "[cough]",
-            "[sigh]",
-            "[gasp]",
-            "[groan]",
-            "[yawn]",
-            "[clearing throat]"
-        ],
-        "usage": "Embed tags in your text, e.g., 'Hello! [laugh] How are you?'",
-        "note": "Only supported by the 'turbo' model"
-    }
-
-
-@mcp.tool
-async def list_paralinguistic_tags() -> dict:
-    """
-    List paralinguistic tags supported by the turbo model.
-
-    These tags can be embedded in text to add expressiveness.
-    Example: "That's so funny! [laugh]"
-    """
-    return await asyncio.to_thread(_list_paralinguistic_tags_impl)
-
-
-def _get_model_info_impl() -> dict:
-    """Core implementation for getting model info."""
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    cuda_available = torch.cuda.is_available()
-
-    return {
-        "device": device,
-        "cuda_available": cuda_available,
-        "cuda_device_name": torch.cuda.get_device_name(0) if cuda_available else None,
-        "models": {
-            "turbo": {
-                "name": "Chatterbox-Turbo",
-                "parameters": "350M",
-                "languages": ["English"],
-                "features": [
-                    "Paralinguistic tags ([laugh], [cough], etc.)",
-                    "Lower compute/VRAM requirements",
-                    "Optimized for voice agents"
-                ],
-                "requires_reference_audio": True
-            },
-            "standard": {
-                "name": "Chatterbox",
-                "parameters": "500M",
-                "languages": ["English"],
-                "features": [
-                    "CFG weight control",
-                    "Exaggeration control",
-                    "Zero-shot voice cloning"
-                ],
-                "requires_reference_audio": False
-            },
-            "multilingual": {
-                "name": "Chatterbox-Multilingual",
-                "parameters": "500M",
-                "languages": "23+ languages",
-                "features": [
-                    "Multi-language support",
-                    "Zero-shot voice cloning",
-                    "CFG and exaggeration controls"
-                ],
-                "requires_reference_audio": False
-            }
-        },
-        "loaded_models": list(_models.keys())
-    }
-
-
-@mcp.tool
-async def get_model_info() -> dict:
-    """
-    Get information about available TTS models and their capabilities.
-    """
-    return await asyncio.to_thread(_get_model_info_impl)
-
-
 # =============================================================================
 # REST API Endpoints for Web UI
 # =============================================================================
@@ -1315,33 +1184,6 @@ async def api_clone_voice_from_youtube(request):
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 
-async def api_list_languages(request):
-    """REST API wrapper for list_supported_languages tool."""
-    try:
-        result = await asyncio.to_thread(_list_supported_languages_impl)
-        return JSONResponse(result)
-    except Exception as e:
-        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
-
-
-async def api_list_tags(request):
-    """REST API wrapper for list_paralinguistic_tags tool."""
-    try:
-        result = await asyncio.to_thread(_list_paralinguistic_tags_impl)
-        return JSONResponse(result)
-    except Exception as e:
-        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
-
-
-async def api_model_info(request):
-    """REST API wrapper for get_model_info tool."""
-    try:
-        result = await asyncio.to_thread(_get_model_info_impl)
-        return JSONResponse(result)
-    except Exception as e:
-        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
-
-
 if __name__ == "__main__":
     import socket
 
@@ -1415,9 +1257,6 @@ if __name__ == "__main__":
         Route("/api/voices/save", api_save_voice, methods=["POST"]),
         Route("/api/voices/delete", api_delete_voice, methods=["POST"]),
         Route("/api/voices/youtube", api_clone_voice_from_youtube, methods=["POST"]),
-        Route("/api/languages", api_list_languages, methods=["GET"]),
-        Route("/api/tags", api_list_tags, methods=["GET"]),
-        Route("/api/model-info", api_model_info, methods=["GET"]),
     ]
 
     print(f"Download URL: http://{local_ip}:8765/download/<filename>")
