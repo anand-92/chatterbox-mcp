@@ -13,41 +13,47 @@ from . import tts, voices
 MCP_INSTRUCTIONS = """
 # Chatterbox TTS Server
 
-Text-to-speech system with voice cloning. Returns download URLs for generated audio.
+Text-to-speech with voice cloning. Returns download URLs.
 
 ## Quick Start
 
 ```python
-text_to_speech(text="Hello, this is a test.")
+text_to_speech(text="Hello!", voice_name="david")
 ```
 
-Download with: `curl -s "<download_url>" -o output.wav`
+Download: `curl -s "<download_url>" -o output.wav`
 
 ## Models
 
-- **standard** (default): English, CFG/exaggeration controls
-- **multilingual**: 23 languages (ar, da, de, el, en, es, fi, fr, he, hi, it, ja, ko, ms, nl, no, pl, pt, ru, sv, sw, tr, zh)
+### standard (default)
+- English only, best quality
+- Use `exaggeration` (0-1) and `cfg_weight` (0-1) to control style
+- Higher exaggeration = more expressive
+- Lower cfg_weight = slower, more deliberate
+
+### turbo
+- Faster generation, supports paralinguistic tags
+- **REQUIRES voice_name** (voice cloning mandatory)
+- Embed tags in text for expressiveness:
+  - `[laugh]`, `[chuckle]`, `[sigh]`, `[cough]`, `[gasp]`, `[groan]`, `[yawn]`, `[clearing throat]`
+- Example: `text_to_speech(text="That's hilarious! [laugh]", model="turbo", voice_name="david")`
+
+### multilingual
+- 23 languages: ar, da, de, el, en, es, fi, fr, he, hi, it, ja, ko, ms, nl, no, pl, pt, ru, sv, sw, tr, zh
+- Set `language` parameter (e.g., "fr", "es", "ja")
 
 ## Voice Cloning
 
 ```python
-# Save a voice
 save_voice(name="david", audio_url="http://example.com/voice.wav")
-
-# Use it
 text_to_speech(text="Hello", voice_name="david")
 ```
 
-## Parameters
-
-- `exaggeration` (0.0-1.0): Higher = more expressive
-- `cfg_weight` (0.0-1.0): Lower = slower, more deliberate
-
 ## Tips
 
-- Use 10-15 seconds of clean speech for voice cloning
-- Lower cfg_weight (0.3) for expressive/dramatic speech
-- Long text is automatically chunked
+- 10-15 seconds of clean speech works best for cloning
+- For turbo with paralinguistic tags, place tags after relevant text
+- Lower cfg_weight (0.3) + higher exaggeration (0.7) for dramatic speech
 """
 
 
@@ -58,9 +64,9 @@ def create_mcp_server() -> FastMCP:
     @mcp.tool
     async def text_to_speech(
         text: str = Field(description="The text to convert to speech."),
-        model: Literal["standard", "multilingual"] = Field(
+        model: Literal["standard", "turbo", "multilingual"] = Field(
             default="standard",
-            description="Model: 'standard' (English) or 'multilingual' (23 languages)"
+            description="Model: 'standard' (default), 'turbo' (fast, requires voice, supports [laugh] tags), or 'multilingual'"
         ),
         voice_name: Optional[str] = Field(
             default=None,

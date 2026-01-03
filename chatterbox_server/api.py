@@ -19,6 +19,15 @@ async def api_health(request):
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 
+async def api_cleanup(request):
+    """Cleanup old output files."""
+    try:
+        result = await asyncio.to_thread(tts.cleanup_old_outputs)
+        return JSONResponse(result)
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
 async def api_text_to_speech(request):
     """REST API: Generate speech from text."""
     try:
@@ -145,6 +154,7 @@ def get_api_routes():
     """Get all REST API routes."""
     return [
         Route("/api/health", api_health, methods=["GET"]),
+        Route("/api/cleanup", api_cleanup, methods=["POST"]),
         Route("/api/tts", api_text_to_speech, methods=["POST"]),
         Route("/api/conversation", api_generate_conversation, methods=["POST"]),
         Route("/api/voices", api_list_voices, methods=["GET"]),

@@ -64,8 +64,9 @@ def get_model(model_type: str = "standard"):
                 model = ChatterboxTTS.from_pretrained(device=device)
             _models[model_type] = _disable_watermarker(model)
         elif model_type == "turbo":
-            print("Turbo not available, using standard")
-            return get_model("standard")
+            from chatterbox.tts_turbo import ChatterboxTurboTTS
+            model = ChatterboxTurboTTS.from_pretrained(device=device)
+            _models[model_type] = _disable_watermarker(model)
         elif model_type == "multilingual":
             from chatterbox.mtl_tts import ChatterboxMultilingualTTS
             model = ChatterboxMultilingualTTS.from_pretrained(device=device)

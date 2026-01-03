@@ -84,6 +84,9 @@ class Config:
         # Voice cache (LRU eviction)
         self.VOICE_CACHE_MAX_SIZE = int(os.getenv("CHATTERBOX_VOICE_CACHE_SIZE", "50"))
 
+        # Output cleanup (hours, 0 = disabled)
+        self.OUTPUT_MAX_AGE_HOURS = int(os.getenv("CHATTERBOX_OUTPUT_MAX_AGE_HOURS", "24"))
+
         # Create directories
         self.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         self.VOICES_DIR.mkdir(parents=True, exist_ok=True)

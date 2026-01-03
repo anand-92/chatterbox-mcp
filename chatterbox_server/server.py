@@ -9,6 +9,7 @@ from starlette.staticfiles import StaticFiles
 from .api import get_api_routes
 from .config import config
 from .mcp_tools import create_mcp_server
+from .tts import cleanup_old_outputs
 
 
 def create_app():
@@ -61,6 +62,7 @@ def print_startup_info():
 def main():
     """Run the server."""
     print_startup_info()
+    cleanup_old_outputs()  # Clean up old files on startup
     app = create_app()
     uvicorn.run(app, host=config.HOST, port=config.PORT, ws="wsproto")
 
