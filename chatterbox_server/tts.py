@@ -205,26 +205,33 @@ def _generate_single_pooled(item: dict, model_pool: Queue, sample_rate: int) -> 
 
 
 def _generate_single_tensor(item: dict, model_pool: Queue, sample_rate: int) -> torch.Tensor:
-    """Generate a single TTS clip and return the audio tensor."""
-    tts_model = model_pool.get()
+    """Generate a single TTS clip. Supports standard and turbo models."""
+    text = item.get("text", "")
+    voice_name = item.get("voice_name")
+    model_type = item.get("model", "standard")
+    exaggeration = item.get("exaggeration", 0.5)
+    cfg_weight = item.get("cfg_weight", 0.5)
+
+    audio_prompt_path = None
+    if voice_name:
+        voice_file = config.VOICES_DIR / f"{voice_name}.wav"
+        if voice_file.exists():
+            audio_prompt_path = str(voice_file)
+
+    if model_type == "turbo" and not audio_prompt_path:
+        raise ValueError("Turbo requires voice_name")
+
+    use_pool = model_type == "standard"
+    tts_model = model_pool.get() if use_pool else get_model(model_type)
 
     try:
-        text = item.get("text", "")
-        voice_name = item.get("voice_name")
-        exaggeration = item.get("exaggeration", 0.5)
-        cfg_weight = item.get("cfg_weight", 0.5)
-
-        audio_prompt_path = None
-        if voice_name:
-            voice_file = config.VOICES_DIR / f"{voice_name}.wav"
-            if voice_file.exists():
-                audio_prompt_path = str(voice_file)
-
-        kwargs = {"exaggeration": exaggeration, "cfg_weight": cfg_weight}
-
-        if audio_prompt_path:
-            cached_conds = get_cached_conditionals(tts_model, audio_prompt_path, exaggeration)
-            tts_model.conds = cached_conds
+        if model_type == "turbo":
+            kwargs = {"audio_prompt_path": audio_prompt_path, "exaggeration": exaggeration, "cfg_weight": cfg_weight}
+        else:
+            kwargs = {"exaggeration": exaggeration, "cfg_weight": cfg_weight}
+            if audio_prompt_path:
+                cached_conds = get_cached_conditionals(tts_model, audio_prompt_path, exaggeration)
+                tts_model.conds = cached_conds
 
         chunks = split_text_into_chunks(text)
         audio_tensors = []
@@ -235,9 +242,9 @@ def _generate_single_tensor(item: dict, model_pool: Queue, sample_rate: int) -> 
         if len(audio_tensors) > 1:
             return concatenate_audio_tensors(audio_tensors, sample_rate, silence_duration=0.15)
         return audio_tensors[0]
-
     finally:
-        model_pool.put(tts_model)
+        if use_pool:
+            model_pool.put(tts_model)
 
 
 def generate_batch(items: List[dict]) -> dict:
