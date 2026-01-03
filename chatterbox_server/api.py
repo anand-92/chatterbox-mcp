@@ -7,6 +7,16 @@ from starlette.routing import Route
 
 from . import tts, voices
 from .config import config
+from .models import get_status
+
+
+async def api_health(request):
+    """Health check endpoint."""
+    try:
+        status = await asyncio.to_thread(get_status)
+        return JSONResponse(status)
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 
 async def api_text_to_speech(request):
@@ -134,6 +144,7 @@ async def upload_voice(request):
 def get_api_routes():
     """Get all REST API routes."""
     return [
+        Route("/api/health", api_health, methods=["GET"]),
         Route("/api/tts", api_text_to_speech, methods=["POST"]),
         Route("/api/conversation", api_generate_conversation, methods=["POST"]),
         Route("/api/voices", api_list_voices, methods=["GET"]),

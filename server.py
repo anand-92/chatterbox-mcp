@@ -5,7 +5,7 @@ Chatterbox TTS MCP Server
 Entry point for the server. Run with: python server.py
 """
 
-from chatterbox.server import main
+from chatterbox_server.server import main
 
 if __name__ == "__main__":
     main()
