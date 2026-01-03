@@ -1,118 +1,112 @@
 # Chatterbox TTS MCP Server
 
-A FastMCP server exposing Chatterbox TTS capabilities for remote text-to-speech generation with voice cloning.
+FastMCP server for text-to-speech generation with voice cloning.
+
+## Project Structure
+
+```
+chatterbox-mcp/
+├── server.py              # Entry point (run this)
+├── chatterbox/            # Main package
+│   ├── __init__.py
+│   ├── config.py          # Configuration (paths, ports, URLs)
+│   ├── models.py          # Model loading, caching, pool management
+│   ├── audio.py           # Audio processing utilities
+│   ├── tts.py             # Core TTS generation logic
+│   ├── voices.py          # Voice management (list, save, delete, youtube)
+│   ├── mcp_tools.py       # MCP tool definitions
+│   ├── api.py             # REST API endpoints
+│   └── server.py          # Server setup and startup
+├── ui/                    # Web interface
+├── voices/                # Voice reference files
+└── output/                # Generated audio files
+```
 
 ## Hardware
 
 - **GPU**: NVIDIA RTX 5090 (32GB VRAM)
-- Easily handles 3+ concurrent model instances (~2GB each for 500M param models)
+- Handles 3+ concurrent model instances (~2GB each)
 
-## Architecture
+## Models
 
-- **server.py** - Main MCP server with TTS tools, REST API, and Web UI
-- **proxy.py** - STDIO proxy for Claude Desktop to connect to the HTTP server
-- **ui/** - Web interface for manual TTS invocation
-
-## Key Components
-
-### Models
 - `standard` - English, CFG/exaggeration controls, 500M params
 - `multilingual` - 23 languages, 500M params
-- `turbo` - Fastest, supports paralinguistic tags (not cached locally)
-
-### Voice System
-- Voices stored in `voices/` as WAV files
-- Voice conditionals are cached to avoid repeated librosa preprocessing
-- Clone from: saved voices, base64 audio, YouTube videos
-
-### Concurrency
-- All MCP tools and REST API handlers are async with `asyncio.to_thread()` for non-blocking concurrent request handling
-- Model pool (`_pool_size=3`) provides thread-safe access to model instances
-- Standard/turbo models use the pool; each concurrent request gets its own model instance
-- Thread-safe model loading with double-checked locking (`_models_lock`, `_pool_lock`)
-- Voice conditionals cache with `_voice_cache_lock` for thread-safe caching
-- Uses `ThreadPoolExecutor` for batch/conversation parallel generation
-
-## Code Patterns
-
-### Adding New MCP Tools
-```python
-def _new_tool_impl(param: str) -> dict:
-    """Core implementation (runs in thread pool)."""
-    # Do blocking work here
-    return {"status": "success", ...}
-
-@mcp.tool
-async def new_tool(
-    param: str = Field(description="Parameter description")
-) -> dict:
-    """Tool docstring shown to LLM."""
-    return await asyncio.to_thread(_new_tool_impl, param)
-```
-
-### Adding REST API Endpoints
-```python
-async def api_new_endpoint(request):
-    data = await request.json()
-    result = await asyncio.to_thread(_new_tool_impl, **data)
-    return JSONResponse(result)
-
-# Add route in __main__:
-api_routes.append(Route("/api/new", api_new_endpoint, methods=["POST"]))
-```
-
-### Audio Processing
-- Use `scipy.io.wavfile` for saving (not torchaudio - FFmpeg compatibility issues)
-- Convert float32 [-1,1] to int16 for WAV output
-- Auto-chunk long text via `split_text_into_chunks()` (~280 chars per chunk)
 
 ## Configuration
 
-Edit these paths in `server.py`:
+Edit `chatterbox/config.py`:
 ```python
-OUTPUT_DIR = Path(r"C:\Users\tazzo\chatterbox-mcp\output")
-VOICES_DIR = Path(r"C:\Users\tazzo\chatterbox-mcp\voices")
-SERVER_PORT = 8765
+PORT = 8765
+PUBLIC_URL = "https://mcp.thethirdroom.xyz"  # or None for local
+POOL_SIZE = 3  # Model instances
 ```
 
 ## Running
 
 ```bash
-# Start server (Windows)
 python server.py
-# or: run_server.bat
-
-# Connect Claude Code
-# Add to ~/.claude/settings.json:
-{
-  "mcpServers": {
-    "chatterbox": {
-      "type": "http",
-      "url": "http://<server-ip>:8765/mcp"
-    }
-  }
-}
 ```
 
-## Testing Tools
+## Code Patterns
+
+### Adding MCP Tools
+
+In `chatterbox/mcp_tools.py`:
+```python
+@mcp.tool
+async def new_tool(param: str = Field(description="...")) -> dict:
+    """Tool docstring."""
+    return await asyncio.to_thread(implementation_func, param)
+```
+
+### Adding REST API Endpoints
+
+In `chatterbox/api.py`:
+```python
+async def api_new_endpoint(request):
+    data = await request.json()
+    result = await asyncio.to_thread(implementation_func, **data)
+    return JSONResponse(result)
+
+# Add to get_api_routes():
+Route("/api/new", api_new_endpoint, methods=["POST"]),
+```
+
+### Adding Core Logic
+
+In `chatterbox/tts.py` or `chatterbox/voices.py`:
+```python
+def new_function(param: str) -> dict:
+    """Synchronous implementation."""
+    # Do work
+    return {"status": "success"}
+```
+
+## Key Design Decisions
+
+- **Async tools with thread pool**: All MCP/API handlers use `asyncio.to_thread()` for non-blocking I/O
+- **Model pool**: Thread-safe queue of model instances for concurrent requests
+- **Voice caching**: Conditionals cached by (path, mtime, exaggeration) to avoid librosa preprocessing
+- **scipy for audio**: Use scipy.io.wavfile instead of torchaudio (FFmpeg issues)
+
+## Testing
 
 ```bash
-# Test voice upload
-curl -X POST "http://localhost:8765/upload_voice/testvoice" -F "file=@sample.wav"
+# Voice upload
+curl -X POST "http://localhost:8765/upload_voice/test" -F "file=@audio.wav"
 
-# Test TTS via REST API
+# TTS
 curl -X POST "http://localhost:8765/api/tts" \
   -H "Content-Type: application/json" \
-  -d '{"text": "Hello world", "model": "standard"}'
+  -d '{"text": "Hello", "model": "standard"}'
 
-# Download generated audio
-curl "http://localhost:8765/download/tts_123456.wav" -o output.wav
+# Download
+curl "http://localhost:8765/download/tts_123456.wav" -o out.wav
 ```
 
 ## Dependencies
 
-- Python 3.10+
-- PyTorch with CUDA
-- fastmcp, scipy, numpy
-- chatterbox-tts (from Resemble AI)
-- yt-dlp, ffmpeg (for YouTube voice cloning)
+- Python 3.10+, PyTorch with CUDA
+- fastmcp, scipy, numpy, uvicorn, starlette
+- chatterbox-tts (Resemble AI)
+- yt-dlp, ffmpeg (YouTube cloning)
