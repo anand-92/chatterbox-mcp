@@ -45,7 +45,7 @@ def print_startup_info():
     """Print server startup information."""
     base_url = config.get_base_url()
     print("=" * 60)
-    print("Chatterbox TTS MCP Server")
+    print("SolSpeak TTS Server")
     print("=" * 60)
     print(f"Local URL:   http://127.0.0.1:{config.PORT}")
     print(f"Network URL: http://{config.SERVER_IP}:{config.PORT}")
@@ -56,7 +56,7 @@ def print_startup_info():
     print(f"  OpenAPI:    {base_url}/openapi.json")
     print("-" * 60)
     print("MCP Config:")
-    print(f'  "chatterbox": {{')
+    print(f'  "solspeak": {{')
     print(f'    "type": "http",')
     print(f'    "url": "{base_url}/mcp"')
     print(f'  }}')

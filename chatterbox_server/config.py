@@ -1,4 +1,4 @@
-"""Configuration settings for Chatterbox TTS server."""
+"""Configuration settings for SolSpeak TTS server."""
 
 import os
 import re
@@ -52,40 +52,40 @@ def _get_lan_ip() -> str:
 
 
 class Config:
-    """Server configuration. Override with CHATTERBOX_* environment variables."""
+    """Server configuration. Override with SOLSPEAK_* environment variables."""
 
     def __init__(self):
         # Paths
-        self.BASE_DIR = Path(os.getenv("CHATTERBOX_BASE_DIR", Path(__file__).parent.parent))
-        self.OUTPUT_DIR = Path(os.getenv("CHATTERBOX_OUTPUT_DIR", self.BASE_DIR / "output"))
-        self.VOICES_DIR = Path(os.getenv("CHATTERBOX_VOICES_DIR", self.BASE_DIR / "voices"))
-        self.UI_DIR = Path(os.getenv("CHATTERBOX_UI_DIR", self.BASE_DIR / "ui"))
+        self.BASE_DIR = Path(os.getenv("SOLSPEAK_BASE_DIR", Path(__file__).parent.parent))
+        self.OUTPUT_DIR = Path(os.getenv("SOLSPEAK_OUTPUT_DIR", self.BASE_DIR / "output"))
+        self.VOICES_DIR = Path(os.getenv("SOLSPEAK_VOICES_DIR", self.BASE_DIR / "voices"))
+        self.UI_DIR = Path(os.getenv("SOLSPEAK_UI_DIR", self.BASE_DIR / "ui"))
 
         # Server
-        self.PORT = int(os.getenv("CHATTERBOX_PORT", "8765"))
-        self.HOST = os.getenv("CHATTERBOX_HOST", "0.0.0.0")
+        self.PORT = int(os.getenv("SOLSPEAK_PORT", "8765"))
+        self.HOST = os.getenv("SOLSPEAK_HOST", "0.0.0.0")
         self.SERVER_IP = _get_lan_ip()
 
         # Public URL (set to "" or "none" to disable)
-        public_url = os.getenv("CHATTERBOX_PUBLIC_URL", "https://mcp.thethirdroom.xyz")
+        public_url = os.getenv("SOLSPEAK_PUBLIC_URL", "https://mcp.thethirdroom.xyz")
         self.PUBLIC_URL = None if public_url.lower() in ("", "none", "null") else public_url
 
         # Model
-        self.POOL_SIZE = int(os.getenv("CHATTERBOX_POOL_SIZE", "3"))
+        self.POOL_SIZE = int(os.getenv("SOLSPEAK_POOL_SIZE", "3"))
         self.LOCAL_MODEL_PATH = Path(os.getenv(
-            "CHATTERBOX_MODEL_PATH",
+            "SOLSPEAK_MODEL_PATH",
             os.path.expanduser("~/.cache/huggingface/hub/models--ResembleAI--chatterbox/"
                               "snapshots/05e904af2b5c7f8e482687a9d7336c5c824467d9")
         ))
 
         # Audio
-        self.MAX_CHUNK_CHARS = int(os.getenv("CHATTERBOX_MAX_CHUNK_CHARS", "280"))
+        self.MAX_CHUNK_CHARS = int(os.getenv("SOLSPEAK_MAX_CHUNK_CHARS", "280"))
 
         # Voice cache (LRU eviction)
-        self.VOICE_CACHE_MAX_SIZE = int(os.getenv("CHATTERBOX_VOICE_CACHE_SIZE", "50"))
+        self.VOICE_CACHE_MAX_SIZE = int(os.getenv("SOLSPEAK_VOICE_CACHE_SIZE", "50"))
 
         # Output cleanup (hours, 0 = disabled)
-        self.OUTPUT_MAX_AGE_HOURS = int(os.getenv("CHATTERBOX_OUTPUT_MAX_AGE_HOURS", "24"))
+        self.OUTPUT_MAX_AGE_HOURS = int(os.getenv("SOLSPEAK_OUTPUT_MAX_AGE_HOURS", "24"))
 
         # Create directories
         self.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

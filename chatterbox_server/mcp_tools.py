@@ -1,4 +1,4 @@
-"""MCP tool definitions for Chatterbox TTS."""
+"""MCP tool definitions for SolSpeak TTS."""
 
 import asyncio
 from typing import List, Literal, Optional
@@ -11,7 +11,7 @@ from . import tts, voices
 
 # MCP server instructions
 MCP_INSTRUCTIONS = """
-# Chatterbox TTS Server
+# SolSpeak TTS Server
 
 Text-to-speech with voice cloning. Returns download URLs.
 
@@ -59,7 +59,7 @@ text_to_speech(text="Hello", voice_name="david")
 
 def create_mcp_server() -> FastMCP:
     """Create and configure the MCP server with all tools."""
-    mcp = FastMCP(name="Chatterbox TTS", instructions=MCP_INSTRUCTIONS)
+    mcp = FastMCP(name="SolSpeak TTS", instructions=MCP_INSTRUCTIONS)
 
     @mcp.tool
     async def text_to_speech(
@@ -89,7 +89,7 @@ def create_mcp_server() -> FastMCP:
             description="CFG weight (0.0-1.0). Lower = slower, more deliberate speech."
         )
     ) -> Audio:
-        """Generate speech from text using Chatterbox TTS."""
+        """Generate speech from text using SolSpeak TTS."""
         return await asyncio.to_thread(
             tts.generate_tts, text, model, voice_name, voice_audio_base64,
             language, exaggeration, cfg_weight

@@ -171,7 +171,7 @@ async def api_cleanup():
     response_model=TTSResponse,
     summary="Text to Speech",
     description="""
-Generate speech from text using Chatterbox TTS.
+Generate speech from text using SolSpeak TTS.
 
 **Models:**
 - `standard` - English, best quality, supports voice cloning
@@ -326,11 +326,11 @@ async def api_clone_voice_from_youtube(request: YouTubeCloneRequest):
 def create_api_app() -> FastAPI:
     """Create the FastAPI application with Swagger docs."""
     app = FastAPI(
-        title="Chatterbox TTS API",
+        title="SolSpeak TTS API",
         description="""
 ## Text-to-Speech API with Voice Cloning
 
-Generate high-quality speech from text using Chatterbox TTS models.
+Generate high-quality speech from text using SolSpeak TTS.
 
 ### Features
 - **Voice Cloning**: Clone any voice from a 10-15 second audio sample
