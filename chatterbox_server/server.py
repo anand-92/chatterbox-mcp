@@ -6,22 +6,26 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.routing import Mount
 from starlette.staticfiles import StaticFiles
 
-from .api import get_api_routes
+from .api import create_api_app
 from .config import config
 from .mcp_tools import create_mcp_server
 from .tts import cleanup_old_outputs
 
 
 def create_app():
-    """Create the combined Starlette application."""
+    """Create the combined application with FastAPI (Swagger) + MCP."""
     mcp = create_mcp_server()
     mcp_http_app = mcp.http_app()
 
+    # Create FastAPI app with Swagger docs
+    api_app = create_api_app()
+
+    # Mount everything together
     app = Starlette(
         routes=[
-            *get_api_routes(),
             Mount("/ui", app=StaticFiles(directory=str(config.UI_DIR), html=True), name="ui"),
-            Mount("/", app=mcp_http_app),
+            Mount("/mcp", app=mcp_http_app),
+            Mount("/", app=api_app),  # FastAPI handles /, /api/*, /docs, /redoc, /download, /upload_voice
         ],
         lifespan=mcp_http_app.lifespan,
     )
@@ -39,23 +43,25 @@ def create_app():
 
 def print_startup_info():
     """Print server startup information."""
+    base_url = config.get_base_url()
     print("=" * 60)
     print("Chatterbox TTS MCP Server")
     print("=" * 60)
-    print(f"Local URL:   http://127.0.0.1:{config.PORT}/mcp")
-    print(f"Network URL: http://{config.SERVER_IP}:{config.PORT}/mcp")
+    print(f"Local URL:   http://127.0.0.1:{config.PORT}")
+    print(f"Network URL: http://{config.SERVER_IP}:{config.PORT}")
+    print("-" * 60)
+    print("API Docs:")
+    print(f"  Swagger UI: {base_url}/docs")
+    print(f"  ReDoc:      {base_url}/redoc")
+    print(f"  OpenAPI:    {base_url}/openapi.json")
     print("-" * 60)
     print("MCP Config:")
     print(f'  "chatterbox": {{')
     print(f'    "type": "http",')
-    print(f'    "url": "http://{config.SERVER_IP}:{config.PORT}/mcp"')
+    print(f'    "url": "{base_url}/mcp"')
     print(f'  }}')
     print("-" * 60)
-    print(f"Download:    {config.get_base_url()}/download/<filename>")
-    print(f"Upload:      curl -X POST '{config.get_base_url()}/upload_voice/<name>' -F 'file=@audio.wav'")
-    print("-" * 60)
-    print(f"Web UI:      http://{config.SERVER_IP}:{config.PORT}/ui/")
-    print(f"             http://127.0.0.1:{config.PORT}/ui/")
+    print(f"Web UI:      {base_url}/ui/")
     print("=" * 60)
 
 
