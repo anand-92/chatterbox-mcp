@@ -1,7 +1,6 @@
 """Main server entry point."""
 
 import uvicorn
-from starlette.applications import Starlette
 from starlette.middleware.cors import CORSMiddleware
 from starlette.routing import Mount
 from starlette.staticfiles import StaticFiles
@@ -12,23 +11,58 @@ from .mcp_tools import create_mcp_server
 from .tts import cleanup_old_outputs
 
 
+class PathDispatcher:
+    """ASGI dispatcher that routes requests based on path prefix."""
+
+    def __init__(self, api_app, mcp_app):
+        self.api_app = api_app
+        self.mcp_app = mcp_app
+        # Paths that go to FastAPI (swagger, api, download, upload)
+        self.api_paths = ("/api", "/docs", "/redoc", "/openapi.json", "/download", "/upload_voice")
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] in ("http", "websocket"):
+            path = scope.get("path", "/")
+            # Route to API app if path matches any API prefix
+            for prefix in self.api_paths:
+                if path.startswith(prefix):
+                    return await self.api_app(scope, receive, send)
+        # Everything else goes to MCP
+        return await self.mcp_app(scope, receive, send)
+
+
 def create_app():
-    """Create the combined application with FastAPI (Swagger) + MCP."""
+    """Create the combined application with FastAPI (Swagger) + MCP at root."""
+    from starlette.applications import Starlette
+
     mcp = create_mcp_server()
     mcp_http_app = mcp.http_app()
 
     # Create FastAPI app with Swagger docs
     api_app = create_api_app()
 
-    # Mount everything together
-    app = Starlette(
+    # Create Starlette app for static files
+    static_app = Starlette(
         routes=[
             Mount("/ui", app=StaticFiles(directory=str(config.UI_DIR), html=True), name="ui"),
-            Mount("/mcp", app=mcp_http_app),
-            Mount("/", app=api_app),  # FastAPI handles /, /api/*, /docs, /redoc, /download, /upload_voice
-        ],
-        lifespan=mcp_http_app.lifespan,
+        ]
     )
+
+    # Combine: static files checked first, then dispatch between API and MCP
+    class CombinedApp:
+        def __init__(self):
+            self.static = static_app
+            self.dispatcher = PathDispatcher(api_app, mcp_http_app)
+
+        async def __call__(self, scope, receive, send):
+            path = scope.get("path", "/")
+            # UI static files
+            if path.startswith("/ui"):
+                return await self.static(scope, receive, send)
+            # Everything else goes through dispatcher
+            return await self.dispatcher(scope, receive, send)
+
+    app = CombinedApp()
 
     # Add CORS middleware
     app = CORSMiddleware(
