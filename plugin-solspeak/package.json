@@ -1,0 +1,56 @@
+{
+  "name": "@elizaos/plugin-solspeak",
+  "version": "0.1.0",
+  "description": "SolSpeak TTS plugin for ElizaOS - Give your agents a voice with voice cloning support",
+  "type": "module",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup --format esm --dts",
+    "dev": "tsup --format esm --dts --watch",
+    "lint": "biome check src/",
+    "lint:fix": "biome check --apply src/",
+    "format": "biome format --write src/"
+  },
+  "keywords": [
+    "elizaos",
+    "plugin",
+    "tts",
+    "text-to-speech",
+    "voice",
+    "voice-cloning",
+    "solspeak",
+    "ai-agent"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "langdetect": "^0.2.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.5.3",
+    "@types/node": "^20.10.0",
+    "tsup": "^8.3.5",
+    "typescript": "^5.3.0"
+  },
+  "peerDependencies": {
+    "@elizaos/core": ">=0.1.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/plugin-solspeak"
+  }
+}
