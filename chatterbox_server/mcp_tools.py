@@ -113,10 +113,11 @@ def create_mcp_server() -> FastMCP:
 
     @mcp.tool
     async def delete_voice(
-        name: str = Field(description="Name of the voice to delete")
+        name: str = Field(description="Name of the voice to delete"),
+        password: str = Field(description="Password required for deletion")
     ) -> dict:
-        """Delete a saved voice from the voices directory."""
-        return await asyncio.to_thread(voices.delete_voice, name)
+        """Delete a saved voice from the voices directory. Requires password."""
+        return await asyncio.to_thread(voices.delete_voice, name, password)
 
     @mcp.tool
     async def clone_voice_from_youtube(

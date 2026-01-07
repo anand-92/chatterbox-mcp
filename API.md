@@ -21,7 +21,6 @@ Complete documentation for the Chatterbox TTS server's MCP tools and REST API en
   - [POST /api/voices/youtube](#post-apivoicesyoutube)
 - [Utility Endpoints](#utility-endpoints)
   - [GET /download/{filename}](#get-downloadfilename)
-  - [POST /upload_voice/{voice_name}](#post-upload_voicevoice_name)
 - [Models](#models)
 - [Error Handling](#error-handling)
 
@@ -312,7 +311,7 @@ curl "http://localhost:8765/api/voices"
 
 ### POST /api/voices/save
 
-Save a voice from a URL (for programmatic access; use `/upload_voice/{name}` for file uploads).
+Save a voice from a URL.
 
 **Request Body:**
 
@@ -390,37 +389,6 @@ Download a generated audio file.
 
 ```bash
 curl "http://localhost:8765/download/tts_1703123456.wav" -o output.wav
-```
-
----
-
-### POST /upload_voice/{voice_name}
-
-Upload a voice reference file for cloning. This is faster than base64 encoding through MCP.
-
-**Parameters:**
-
-| Name | Location | Type | Description |
-|------|----------|------|-------------|
-| `voice_name` | path | string | Name for the voice (alphanumeric, hyphens, underscores) |
-| `file` | form-data | file | WAV audio file (5-15 seconds of clear speech) |
-
-**Response:**
-
-```json
-{
-  "status": "success",
-  "voice_name": "david",
-  "size_bytes": 384000,
-  "usage": "text_to_speech(text='Your text', voice_name='david')"
-}
-```
-
-**curl Example:**
-
-```bash
-curl -X POST "http://localhost:8765/upload_voice/david" \
-  -F "file=@voice_sample.wav"
 ```
 
 ---

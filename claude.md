@@ -93,7 +93,9 @@ def new_function(param: str) -> dict:
 
 ```bash
 # Voice upload
-curl -X POST "http://localhost:8765/upload_voice/test" -F "file=@audio.wav"
+curl -X POST "http://localhost:8765/api/voices/youtube" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "test", "youtube_url": "https://youtube.com/...", "timestamp": "1:30"}'
 
 # TTS
 curl -X POST "http://localhost:8765/api/tts" \

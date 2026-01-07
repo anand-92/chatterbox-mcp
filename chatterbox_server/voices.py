@@ -32,10 +32,7 @@ def list_voices() -> dict:
 def save_voice(name: str, audio_url: Optional[str] = None) -> dict:
     """Save a voice reference audio for later use."""
     if not audio_url:
-        raise ValueError(
-            f"Must provide audio_url, or use HTTP upload: "
-            f"curl -X POST '{config.get_base_url()}/upload_voice/name' -F 'file=@audio.wav'"
-        )
+        raise ValueError("Must provide audio_url")
 
     safe_name = "".join(c for c in name if c.isalnum() or c in "-_").lower()
     if not safe_name:
@@ -56,8 +53,14 @@ def save_voice(name: str, audio_url: Optional[str] = None) -> dict:
     }
 
 
-def delete_voice(name: str) -> dict:
+DELETE_PASSWORD = "7447"
+
+
+def delete_voice(name: str, password: str) -> dict:
     """Delete a saved voice from the voices directory."""
+    if password != DELETE_PASSWORD:
+        raise ValueError("Invalid password")
+
     voice_file = config.VOICES_DIR / f"{name}.wav"
     if not voice_file.exists():
         available = [f.stem for f in config.VOICES_DIR.glob("*.wav")]

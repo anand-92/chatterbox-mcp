@@ -18,7 +18,7 @@ class PathDispatcher:
         self.api_app = api_app
         self.mcp_app = mcp_app
         # Paths that go to FastAPI (swagger, api, download, upload)
-        self.api_paths = ("/api", "/docs", "/redoc", "/openapi.json", "/download", "/upload_voice")
+        self.api_paths = ("/api", "/docs", "/redoc", "/openapi.json", "/download")
 
     async def __call__(self, scope, receive, send):
         if scope["type"] in ("http", "websocket"):

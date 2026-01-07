@@ -167,42 +167,6 @@
 
                 <!-- Voice Actions -->
                 <div class="space-y-6">
-                    <!-- Upload Voice -->
-                    <div class="bg-gray-800 rounded-lg p-6">
-                        <h3 class="text-lg font-semibold mb-4">Upload Voice</h3>
-                        <div class="space-y-4">
-                            <div>
-                                <label class="block text-sm font-medium text-gray-300 mb-2">Voice Name</label>
-                                <input type="text" id="upload-name" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2.5 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="my-voice">
-                            </div>
-                            <div>
-                                <label class="block text-sm font-medium text-gray-300 mb-2">Audio File</label>
-                                <input type="file" id="upload-file" accept=".wav" class="w-full text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-blue-600 file:text-white file:font-medium file:cursor-pointer hover:file:bg-blue-700">
-                            </div>
-                            <button onclick="uploadVoice()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 px-4 rounded-lg transition duration-200">
-                                Upload
-                            </button>
-                        </div>
-                    </div>
-
-                    <!-- Save from URL -->
-                    <div class="bg-gray-800 rounded-lg p-6">
-                        <h3 class="text-lg font-semibold mb-4">Save from URL</h3>
-                        <div class="space-y-4">
-                            <div>
-                                <label class="block text-sm font-medium text-gray-300 mb-2">Voice Name</label>
-                                <input type="text" id="url-name" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2.5 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="my-voice">
-                            </div>
-                            <div>
-                                <label class="block text-sm font-medium text-gray-300 mb-2">Audio URL</label>
-                                <input type="url" id="url-audio" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2.5 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="https://example.com/voice.wav">
-                            </div>
-                            <button onclick="saveVoiceFromUrl()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 px-4 rounded-lg transition duration-200">
-                                Save
-                            </button>
-                        </div>
-                    </div>
-
                     <!-- Clone from YouTube -->
                     <div class="bg-gray-800 rounded-lg p-6">
                         <h3 class="text-lg font-semibold mb-4">Clone from YouTube</h3>
@@ -559,70 +523,6 @@
         }
 
         // Voice Management
-        async function uploadVoice() {
-            const name = document.getElementById('upload-name').value.trim();
-            const fileInput = document.getElementById('upload-file');
-
-            if (!name) {
-                showToast('Please enter a voice name', true);
-                return;
-            }
-            if (!fileInput.files[0]) {
-                showToast('Please select an audio file', true);
-                return;
-            }
-
-            const formData = new FormData();
-            formData.append('file', fileInput.files[0]);
-
-            try {
-                const res = await fetch(`${API_BASE}/upload_voice/${name}`, {
-                    method: 'POST',
-                    body: formData
-                });
-                const data = await res.json();
-                if (data.status === 'success') {
-                    showToast(`Voice "${name}" uploaded successfully!`);
-                    loadVoices();
-                    document.getElementById('upload-name').value = '';
-                    fileInput.value = '';
-                } else {
-                    throw new Error(data.error || 'Upload failed');
-                }
-            } catch (e) {
-                showToast(e.message, true);
-            }
-        }
-
-        async function saveVoiceFromUrl() {
-            const name = document.getElementById('url-name').value.trim();
-            const url = document.getElementById('url-audio').value.trim();
-
-            if (!name || !url) {
-                showToast('Please enter both name and URL', true);
-                return;
-            }
-
-            try {
-                const res = await fetch(`${API_BASE}/api/voices/save`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name, audio_url: url })
-                });
-                const data = await res.json();
-                if (data.status === 'success') {
-                    showToast(`Voice "${name}" saved successfully!`);
-                    loadVoices();
-                    document.getElementById('url-name').value = '';
-                    document.getElementById('url-audio').value = '';
-                } else {
-                    throw new Error(data.message || 'Save failed');
-                }
-            } catch (e) {
-                showToast(e.message, true);
-            }
-        }
-
         async function cloneFromYouTube() {
             const btn = document.getElementById('yt-btn');
             const name = document.getElementById('yt-name').value.trim();

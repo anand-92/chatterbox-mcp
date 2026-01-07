@@ -41,10 +41,6 @@ const character = {
 Before using the plugin, clone a voice on your SolSpeak server:
 
 ```bash
-# From a local file
-curl -X POST "https://mcp.thethirdroom.xyz/upload_voice/agent-voice" \
-  -F "file=@voice-sample.wav"
-
 # From YouTube
 curl -X POST "https://mcp.thethirdroom.xyz/api/voices/youtube" \
   -H "Content-Type: application/json" \
@@ -204,7 +200,7 @@ The plugin uses these SolSpeak REST endpoints:
 |----------|--------|-------------|
 | `/api/tts` | POST | Generate speech |
 | `/api/voices` | GET | List voices |
-| `/upload_voice/{name}` | POST | Upload voice file |
+| `/api/voices/youtube` | POST | Clone voice from YouTube |
 | `/download/{filename}` | GET | Download audio |
 
 ## Development

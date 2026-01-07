@@ -100,6 +100,7 @@ class VoiceSaveRequest(BaseModel):
 class VoiceDeleteRequest(BaseModel):
     """Request body for deleting a voice."""
     name: str = Field(..., description="Name of the voice to delete")
+    password: str = Field(..., description="Password required for deletion")
 
 
 class YouTubeCloneRequest(BaseModel):
@@ -268,12 +269,12 @@ async def api_save_voice(request: VoiceSaveRequest):
 @router.post(
     "/voices/delete",
     summary="Delete Voice",
-    description="Delete a saved voice from the voices directory"
+    description="Delete a saved voice from the voices directory. Requires password."
 )
 async def api_delete_voice(request: VoiceDeleteRequest):
     """Delete a voice."""
     try:
-        result = await asyncio.to_thread(voices.delete_voice, name=request.name)
+        result = await asyncio.to_thread(voices.delete_voice, name=request.name, password=request.password)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -333,7 +334,7 @@ Generate high-quality speech from text using SolSpeak TTS.
 - **YouTube Cloning**: Extract voice samples directly from YouTube videos
 
 ### Quick Start
-1. Upload a voice: `POST /upload_voice/{name}` with a WAV file
+1. Clone a voice: `POST /api/voices/youtube` with YouTube URL and timestamp
 2. Generate speech: `POST /api/tts` with text and voice_name
 3. Download audio from the returned `download_url`
 
@@ -364,34 +365,5 @@ Example: `"That's hilarious! [laugh] I can't believe it."`
         if file_path.exists() and file_path.suffix == ".wav":
             return FileResponse(file_path, media_type="audio/wav", filename=filename)
         raise HTTPException(status_code=404, detail="File not found")
-
-    # Add upload endpoint
-    @app.post(
-        "/upload_voice/{voice_name}",
-        tags=["Voices"],
-        summary="Upload Voice File",
-        description="Upload a WAV file to use as a voice reference for cloning"
-    )
-    async def upload_voice(
-        voice_name: str = Path(..., description="Name for the voice"),
-        file: UploadFile = File(..., description="WAV audio file (5-15 seconds of clear speech)")
-    ):
-        """Upload a voice audio file."""
-        safe_name = "".join(c for c in voice_name if c.isalnum() or c in "-_").lower()
-        if not safe_name:
-            raise HTTPException(status_code=400, detail="Invalid voice name")
-
-        output_path = config.VOICES_DIR / f"{safe_name}.wav"
-        contents = await file.read()
-        with open(output_path, "wb") as f:
-            f.write(contents)
-
-        print(f"Voice '{safe_name}' uploaded: {len(contents)} bytes")
-        return {
-            "status": "success",
-            "voice_name": safe_name,
-            "size_bytes": len(contents),
-            "usage": f"text_to_speech(text='Your text', voice_name='{safe_name}')"
-        }
 
     return app
