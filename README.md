@@ -88,13 +88,6 @@ text_to_speech(text="...", exaggeration=0.7, cfg_weight=0.3)
 ### `list_voices`
 List all saved voice references.
 
-### `save_voice`
-Save a voice reference for later use.
-
-```python
-save_voice(name="david", audio_url="http://example.com/voice.wav")
-```
-
 ### `delete_voice`
 Delete a saved voice reference.
 

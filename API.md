@@ -10,7 +10,6 @@ Complete documentation for the Chatterbox TTS server's MCP tools and REST API en
   - [text_to_speech](#text_to_speech)
   - [generate_conversation](#generate_conversation)
   - [list_voices](#list_voices)
-  - [save_voice](#save_voice)
   - [delete_voice](#delete_voice)
   - [clone_voice_from_youtube](#clone_voice_from_youtube)
 - [REST API Endpoints](#rest-api-endpoints)
@@ -181,39 +180,6 @@ List all saved voices available for voice cloning.
 
 ---
 
-### save_voice
-
-Save a voice reference audio for later use in voice cloning.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `name` | string | Yes | Name for the voice (alphanumeric, hyphens, underscores) |
-| `audio_url` | string | Yes* | URL to download the voice audio from |
-
-*For file uploads, use the `/upload_voice/{name}` endpoint instead.
-
-**Returns:**
-
-```json
-{
-  "status": "success",
-  "voice_name": "david",
-  "file_path": "C:\\Users\\tazzo\\chatterbox-mcp\\voices\\david.wav",
-  "size_bytes": 384000,
-  "usage": "text_to_speech(text='Your text', voice_name='david')"
-}
-```
-
-**Example:**
-
-```python
-save_voice(name="david", audio_url="https://example.com/voice-sample.wav")
-```
-
----
-
 ### delete_voice
 
 Delete a saved voice from the voices directory.
@@ -346,7 +312,7 @@ curl "http://localhost:8765/api/voices"
 
 ### POST /api/voices/save
 
-Save a voice from a URL.
+Save a voice from a URL (for programmatic access; use `/upload_voice/{name}` for file uploads).
 
 **Request Body:**
 
@@ -357,7 +323,17 @@ Save a voice from a URL.
 }
 ```
 
-**Response:** Same as `save_voice` MCP tool.
+**Response:**
+
+```json
+{
+  "status": "success",
+  "voice_name": "david",
+  "file_path": "/path/to/voices/david.wav",
+  "size_bytes": 384000,
+  "usage": "text_to_speech(text='Your text', voice_name='david')"
+}
+```
 
 ---
 

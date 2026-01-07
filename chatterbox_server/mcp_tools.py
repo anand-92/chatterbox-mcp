@@ -41,7 +41,7 @@ Download: `curl -s "<download_url>" -o output.wav`
 ## Voice Cloning
 
 ```python
-save_voice(name="david", audio_url="http://example.com/voice.wav")
+clone_voice_from_youtube(name="david", youtube_url="https://youtube.com/...", timestamp="1:30")
 text_to_speech(text="Hello", voice_name="david")
 ```
 
@@ -110,17 +110,6 @@ def create_mcp_server() -> FastMCP:
     async def list_voices() -> dict:
         """List all saved voices available for voice cloning."""
         return await asyncio.to_thread(voices.list_voices)
-
-    @mcp.tool
-    async def save_voice(
-        name: str = Field(description="Name for the voice (saved as name.wav)"),
-        audio_url: Optional[str] = Field(
-            default=None,
-            description="URL to download the voice audio from"
-        ),
-    ) -> dict:
-        """Save a voice reference audio for later use in voice cloning."""
-        return await asyncio.to_thread(voices.save_voice, name, audio_url)
 
     @mcp.tool
     async def delete_voice(
