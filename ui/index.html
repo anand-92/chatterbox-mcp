@@ -52,7 +52,7 @@
                                 <label class="block text-sm font-medium text-gray-300 mb-2">Model</label>
                                 <select id="tts-model" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
                                     <option value="standard">Standard (English)</option>
-                                    <option value="multilingual">Multilingual (23+ langs)</option>
+                                    <option value="turbo">Turbo (Fast + Tags)</option>
                                 </select>
                             </div>
                             <div>
@@ -63,10 +63,6 @@
                             </div>
                         </div>
 
-                        <div id="language-row" class="hidden">
-                            <label class="block text-sm font-medium text-gray-300 mb-2">Language</label>
-                            <select id="tts-language" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"></select>
-                        </div>
 
                         <div class="slider-container">
                             <label class="block text-sm font-medium text-gray-300 mb-2">
@@ -392,11 +388,6 @@
             textarea.selectionStart = textarea.selectionEnd = start + tag.length;
         }
 
-        // Model change handler
-        document.getElementById('tts-model').addEventListener('change', function() {
-            const langRow = document.getElementById('language-row');
-            langRow.classList.toggle('hidden', this.value !== 'multilingual');
-        });
 
         // Generate TTS
         async function generateTTS() {
@@ -422,7 +413,6 @@
                         text,
                         model,
                         voice_name: document.getElementById('tts-voice').value || null,
-                        language: model === 'multilingual' ? document.getElementById('tts-language').value : null,
                         exaggeration: parseFloat(document.getElementById('tts-exaggeration').value),
                         cfg_weight: parseFloat(document.getElementById('tts-cfg').value)
                     })

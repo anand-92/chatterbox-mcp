@@ -67,10 +67,6 @@ def get_model(model_type: str = "standard"):
             from chatterbox.tts_turbo import ChatterboxTurboTTS
             model = ChatterboxTurboTTS.from_pretrained(device=device)
             _models[model_type] = _disable_watermarker(model)
-        elif model_type == "multilingual":
-            from chatterbox.mtl_tts import ChatterboxMultilingualTTS
-            model = ChatterboxMultilingualTTS.from_pretrained(device=device)
-            _models[model_type] = _disable_watermarker(model)
         else:
             raise ValueError(f"Unknown model type: {model_type}")
 

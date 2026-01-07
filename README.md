@@ -16,7 +16,7 @@ A FastMCP server that exposes [Chatterbox TTS](https://github.com/resemble-ai/ch
 | Model | Languages | Features |
 |-------|-----------|----------|
 | `standard` | English | CFG weight, exaggeration control, zero-shot cloning |
-| `multilingual` | 23 languages | Multi-language support, voice cloning |
+| `turbo` | English | Fast generation, paralinguistic tags, requires voice |
 
 ## Installation
 
@@ -78,8 +78,8 @@ text_to_speech(text="Hello, world!")
 # With voice cloning
 text_to_speech(text="Hello", voice_name="david")
 
-# Multilingual
-text_to_speech(text="Bonjour!", model="multilingual", language="fr")
+# Turbo with paralinguistic tags
+text_to_speech(text="That's hilarious! [laugh]", model="turbo", voice_name="david")
 
 # Expressive/dramatic
 text_to_speech(text="...", exaggeration=0.7, cfg_weight=0.3)
@@ -97,12 +97,6 @@ save_voice(name="david", audio_url="http://example.com/voice.wav")
 
 ### `delete_voice`
 Delete a saved voice reference.
-
-### `list_supported_languages`
-List all 23 supported languages for the multilingual model.
-
-### `get_model_info`
-Get information about available models and GPU status.
 
 ## Tips
 

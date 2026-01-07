@@ -52,7 +52,6 @@ def generate_tts(
     model: str = "standard",
     voice_name: Optional[str] = None,
     voice_audio_base64: Optional[str] = None,
-    language: Optional[str] = None,
     exaggeration: float = 0.5,
     cfg_weight: float = 0.5
 ) -> dict:
@@ -81,7 +80,7 @@ def generate_tts(
     if model == "turbo" and not audio_prompt_path:
         raise ValueError("Turbo model requires a voice reference (voice_name or voice_audio_base64)")
 
-    # Use model pool for standard, direct load for turbo/multilingual
+    # Use model pool for standard, direct load for turbo
     use_pool = model == "standard"
     model_pool = None
     tts_model = None
@@ -103,9 +102,7 @@ def generate_tts(
             }
         else:
             kwargs = {"exaggeration": exaggeration, "cfg_weight": cfg_weight}
-            if model == "multilingual" and language:
-                kwargs["language_id"] = language
-            # Standard/multilingual use cached conditionals
+            # Standard uses cached conditionals
             if audio_prompt_path:
                 cached_conds = get_cached_conditionals(tts_model, audio_prompt_path, exaggeration)
                 tts_model.conds = cached_conds

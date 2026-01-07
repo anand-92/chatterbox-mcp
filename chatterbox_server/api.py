@@ -19,9 +19,9 @@ from .models import get_status
 class TTSRequest(BaseModel):
     """Request body for text-to-speech generation."""
     text: str = Field(..., description="The text to convert to speech")
-    model: Literal["standard", "turbo", "multilingual"] = Field(
+    model: Literal["standard", "turbo"] = Field(
         default="standard",
-        description="Model: 'standard' (default), 'turbo' (fast, requires voice), or 'multilingual'"
+        description="Model: 'standard' (default) or 'turbo' (fast, requires voice)"
     )
     voice_name: Optional[str] = Field(
         default=None,
@@ -30,10 +30,6 @@ class TTSRequest(BaseModel):
     voice_audio_base64: Optional[str] = Field(
         default=None,
         description="Base64-encoded WAV audio for voice cloning (5-15 seconds)"
-    )
-    language: Optional[str] = Field(
-        default=None,
-        description="Language code for multilingual model (e.g., 'en', 'fr', 'es')"
     )
     exaggeration: float = Field(
         default=0.5,
@@ -176,7 +172,6 @@ Generate speech from text using SolSpeak TTS.
 **Models:**
 - `standard` - English, best quality, supports voice cloning
 - `turbo` - Faster, requires voice_name, supports paralinguistic tags: [laugh], [chuckle], [sigh], [cough], [gasp], [groan], [yawn], [clearing throat]
-- `multilingual` - 23 languages (ar, da, de, el, en, es, fi, fr, he, hi, it, ja, ko, ms, nl, no, pl, pt, ru, sv, sw, tr, zh)
 
 **Tips:**
 - Higher exaggeration = more expressive speech
@@ -193,7 +188,6 @@ async def api_text_to_speech(request: TTSRequest):
             model=request.model,
             voice_name=request.voice_name,
             voice_audio_base64=request.voice_audio_base64,
-            language=request.language,
             exaggeration=request.exaggeration,
             cfg_weight=request.cfg_weight
         )
@@ -334,7 +328,7 @@ Generate high-quality speech from text using SolSpeak TTS.
 
 ### Features
 - **Voice Cloning**: Clone any voice from a 10-15 second audio sample
-- **Multiple Models**: Standard (best quality), Turbo (fast + tags), Multilingual (23 languages)
+- **Multiple Models**: Standard (best quality), Turbo (fast + paralinguistic tags)
 - **Conversations**: Generate multi-speaker dialogues as single audio files
 - **YouTube Cloning**: Extract voice samples directly from YouTube videos
 

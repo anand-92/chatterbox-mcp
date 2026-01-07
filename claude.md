@@ -30,7 +30,7 @@ chatterbox-mcp/
 ## Models
 
 - `standard` - English, CFG/exaggeration controls, 500M params
-- `multilingual` - 23 languages, 500M params
+- `turbo` - English, fast generation, paralinguistic tags, requires voice
 
 ## Configuration
 

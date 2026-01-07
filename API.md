@@ -8,15 +8,11 @@ Complete documentation for the Chatterbox TTS server's MCP tools and REST API en
 - [Server Configuration](#server-configuration)
 - [MCP Tools](#mcp-tools)
   - [text_to_speech](#text_to_speech)
-  - [batch_text_to_speech](#batch_text_to_speech)
   - [generate_conversation](#generate_conversation)
   - [list_voices](#list_voices)
   - [save_voice](#save_voice)
   - [delete_voice](#delete_voice)
   - [clone_voice_from_youtube](#clone_voice_from_youtube)
-  - [list_supported_languages](#list_supported_languages)
-  - [list_paralinguistic_tags](#list_paralinguistic_tags)
-  - [get_model_info](#get_model_info)
 - [REST API Endpoints](#rest-api-endpoints)
   - [POST /api/tts](#post-apitts)
   - [POST /api/conversation](#post-apiconversation)
@@ -24,9 +20,6 @@ Complete documentation for the Chatterbox TTS server's MCP tools and REST API en
   - [POST /api/voices/save](#post-apivoicessave)
   - [POST /api/voices/delete](#post-apivoicesdelete)
   - [POST /api/voices/youtube](#post-apivoicesyoutube)
-  - [GET /api/languages](#get-apilanguages)
-  - [GET /api/tags](#get-apitags)
-  - [GET /api/model-info](#get-apimodel-info)
 - [Utility Endpoints](#utility-endpoints)
   - [GET /download/{filename}](#get-downloadfilename)
   - [POST /upload_voice/{voice_name}](#post-upload_voicevoice_name)
@@ -72,10 +65,9 @@ Generate speech from text using Chatterbox TTS.
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `text` | string | Yes | - | Text to convert to speech. Supports paralinguistic tags with turbo model. |
-| `model` | string | No | `"standard"` | Model to use: `"standard"` or `"multilingual"` |
+| `model` | string | No | `"standard"` | Model to use: `"standard"` or `"turbo"` |
 | `voice_name` | string | No | `null` | Name of a saved voice for cloning. Takes priority over `voice_audio_base64`. |
 | `voice_audio_base64` | string | No | `null` | Base64-encoded WAV audio for one-off voice cloning (5-15 seconds recommended). |
-| `language` | string | No | `null` | Language code for multilingual model (e.g., `"en"`, `"fr"`, `"es"`). |
 | `exaggeration` | float | No | `0.5` | Expressiveness level (0.0-1.0). Higher = more expressive. |
 | `cfg_weight` | float | No | `0.5` | CFG weight (0.0-1.0). Lower = slower, more deliberate speech. |
 
@@ -100,62 +92,11 @@ text_to_speech(text="Hello, world!")
 # With voice cloning
 text_to_speech(text="Hello from a cloned voice", voice_name="david")
 
-# Multilingual
-text_to_speech(text="Bonjour!", model="multilingual", language="fr")
+# Turbo with paralinguistic tags
+text_to_speech(text="That's hilarious! [laugh]", model="turbo", voice_name="david")
 
 # Expressive speech
 text_to_speech(text="This is amazing!", exaggeration=0.8, cfg_weight=0.3)
-```
-
----
-
-### batch_text_to_speech
-
-Generate multiple TTS clips in parallel for faster batch processing.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `items` | array | Yes | List of TTS items (see item structure below) |
-
-**Item Structure:**
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `text` | string | Yes | - | Text to speak |
-| `voice_name` | string | No | `null` | Voice to use |
-| `exaggeration` | float | No | `0.5` | Expressiveness (0.0-1.0) |
-| `cfg_weight` | float | No | `0.5` | CFG weight (0.0-1.0) |
-
-**Returns:**
-
-```json
-{
-  "status": "success",
-  "total": 3,
-  "completed": 3,
-  "failed": 0,
-  "results": [
-    {
-      "index": 0,
-      "filename": "tts_1703123456001.wav",
-      "download_url": "http://server:8765/download/tts_1703123456001.wav",
-      "size_bytes": 122880
-    }
-  ],
-  "errors": null
-}
-```
-
-**Example:**
-
-```python
-batch_text_to_speech(items=[
-    {"text": "Hello from voice one", "voice_name": "alice"},
-    {"text": "Hello from voice two", "voice_name": "bob", "exaggeration": 0.7},
-    {"text": "Hello from voice three", "voice_name": "charlie"}
-])
 ```
 
 ---
@@ -335,125 +276,6 @@ clone_voice_from_youtube(
 
 ---
 
-### list_supported_languages
-
-List all languages supported by the multilingual model.
-
-**Parameters:** None
-
-**Returns:**
-
-```json
-{
-  "ar": "Arabic",
-  "da": "Danish",
-  "de": "German",
-  "el": "Greek",
-  "en": "English",
-  "es": "Spanish",
-  "fi": "Finnish",
-  "fr": "French",
-  "he": "Hebrew",
-  "hi": "Hindi",
-  "it": "Italian",
-  "ja": "Japanese",
-  "ko": "Korean",
-  "ms": "Malay",
-  "nl": "Dutch",
-  "no": "Norwegian",
-  "pl": "Polish",
-  "pt": "Portuguese",
-  "ru": "Russian",
-  "sv": "Swedish",
-  "sw": "Swahili",
-  "tr": "Turkish",
-  "zh": "Chinese"
-}
-```
-
----
-
-### list_paralinguistic_tags
-
-List paralinguistic tags supported by the turbo model.
-
-**Parameters:** None
-
-**Returns:**
-
-```json
-{
-  "tags": [
-    "[laugh]",
-    "[chuckle]",
-    "[cough]",
-    "[sigh]",
-    "[gasp]",
-    "[groan]",
-    "[yawn]",
-    "[clearing throat]"
-  ],
-  "usage": "Embed tags in your text, e.g., 'Hello! [laugh] How are you?'",
-  "note": "Only supported by the 'turbo' model"
-}
-```
-
----
-
-### get_model_info
-
-Get information about available TTS models and their capabilities.
-
-**Parameters:** None
-
-**Returns:**
-
-```json
-{
-  "device": "cuda",
-  "cuda_available": true,
-  "cuda_device_name": "NVIDIA GeForce RTX 5090",
-  "models": {
-    "turbo": {
-      "name": "Chatterbox-Turbo",
-      "parameters": "350M",
-      "languages": ["English"],
-      "features": [
-        "Paralinguistic tags ([laugh], [cough], etc.)",
-        "Lower compute/VRAM requirements",
-        "Optimized for voice agents"
-      ],
-      "requires_reference_audio": true
-    },
-    "standard": {
-      "name": "Chatterbox",
-      "parameters": "500M",
-      "languages": ["English"],
-      "features": [
-        "CFG weight control",
-        "Exaggeration control",
-        "Zero-shot voice cloning"
-      ],
-      "requires_reference_audio": false
-    },
-    "multilingual": {
-      "name": "Chatterbox-Multilingual",
-      "parameters": "500M",
-      "languages": "23+ languages",
-      "features": [
-        "Multi-language support",
-        "Zero-shot voice cloning",
-        "CFG and exaggeration controls"
-      ],
-      "requires_reference_audio": false
-    }
-  },
-  "loaded_models": ["standard"]
-}
-```
-
----
-
 ## REST API Endpoints
 
 All REST API endpoints are prefixed with `/api/`. They mirror the MCP tools for web application integration.
@@ -470,7 +292,6 @@ Generate speech from text.
   "model": "standard",
   "voice_name": "david",
   "voice_audio_base64": null,
-  "language": null,
   "exaggeration": 0.5,
   "cfg_weight": 0.5
 }
@@ -575,30 +396,6 @@ Clone a voice from YouTube.
 
 ---
 
-### GET /api/languages
-
-List supported languages for multilingual model.
-
-**Response:** Same as `list_supported_languages` MCP tool.
-
----
-
-### GET /api/tags
-
-List paralinguistic tags for turbo model.
-
-**Response:** Same as `list_paralinguistic_tags` MCP tool.
-
----
-
-### GET /api/model-info
-
-Get model information and capabilities.
-
-**Response:** Same as `get_model_info` MCP tool.
-
----
-
 ## Utility Endpoints
 
 ### GET /download/{filename}
@@ -661,18 +458,12 @@ curl -X POST "http://localhost:8765/upload_voice/david" \
 - **Features:** CFG weight control, exaggeration control, zero-shot voice cloning
 - **Best for:** General English TTS with fine-grained control
 
-### Multilingual Model
-
-- **Parameters:** 500M
-- **Languages:** 23 languages (ar, da, de, el, en, es, fi, fr, he, hi, it, ja, ko, ms, nl, no, pl, pt, ru, sv, sw, tr, zh)
-- **Features:** Multi-language support, zero-shot voice cloning
-- **Best for:** Non-English TTS or multilingual applications
-
-### Turbo Model (if available locally)
+### Turbo Model
 
 - **Parameters:** 350M
 - **Languages:** English only
 - **Features:** Paralinguistic tags, lower VRAM usage, fastest generation
+- **Requires:** Voice reference (voice cloning mandatory)
 - **Best for:** Real-time voice agents, expressive speech with tags
 
 ---
@@ -703,7 +494,7 @@ All endpoints return errors in a consistent format:
 | `Voice 'X' not found` | Voice name doesn't exist | Use `list_voices` to see available voices |
 | `yt-dlp not found` | Missing dependency | Install with `pip install yt-dlp` |
 | `ffmpeg not found` | Missing dependency | Install ffmpeg |
-| `No items provided` | Empty batch/conversation | Provide at least one item |
+| `No items provided` | Empty conversation | Provide at least one item |
 | `Must provide audio_url` | Missing voice source | Provide URL or use upload endpoint |
 
 ---
@@ -714,15 +505,13 @@ All endpoints return errors in a consistent format:
 
 1. Use 10-15 seconds of clean speech for reference audio
 2. Minimize background noise in reference clips
-3. Match reference language to target language for multilingual
-4. Cache voice files locally for faster generation
+3. Cache voice files locally for faster generation
 
 ### Performance
 
-1. Use batch endpoints for multiple generations
-2. Use `generate_conversation` for dialogues (server-side stitching is faster)
-3. Lower `exaggeration` and higher `cfg_weight` for faster generation
-4. The model pool supports 3 concurrent requests by default
+1. Use `generate_conversation` for multi-speaker dialogues (server-side stitching is faster)
+2. Lower `exaggeration` and higher `cfg_weight` for faster generation
+3. The model pool supports 3 concurrent requests by default
 
 ### Text Formatting
 

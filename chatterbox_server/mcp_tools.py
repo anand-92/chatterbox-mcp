@@ -38,10 +38,6 @@ Download: `curl -s "<download_url>" -o output.wav`
   - `[laugh]`, `[chuckle]`, `[sigh]`, `[cough]`, `[gasp]`, `[groan]`, `[yawn]`, `[clearing throat]`
 - Example: `text_to_speech(text="That's hilarious! [laugh]", model="turbo", voice_name="david")`
 
-### multilingual
-- 23 languages: ar, da, de, el, en, es, fi, fr, he, hi, it, ja, ko, ms, nl, no, pl, pt, ru, sv, sw, tr, zh
-- Set `language` parameter (e.g., "fr", "es", "ja")
-
 ## Voice Cloning
 
 ```python
@@ -64,9 +60,9 @@ def create_mcp_server() -> FastMCP:
     @mcp.tool
     async def text_to_speech(
         text: str = Field(description="The text to convert to speech."),
-        model: Literal["standard", "turbo", "multilingual"] = Field(
+        model: Literal["standard", "turbo"] = Field(
             default="standard",
-            description="Model: 'standard' (default), 'turbo' (fast, requires voice, supports [laugh] tags), or 'multilingual'"
+            description="Model: 'standard' (default) or 'turbo' (fast, requires voice, supports paralinguistic tags like [laugh], [sigh])"
         ),
         voice_name: Optional[str] = Field(
             default=None,
@@ -75,10 +71,6 @@ def create_mcp_server() -> FastMCP:
         voice_audio_base64: Optional[str] = Field(
             default=None,
             description="Base64-encoded WAV audio for voice cloning (5-15 seconds)."
-        ),
-        language: Optional[str] = Field(
-            default=None,
-            description="Language code for multilingual model (e.g., 'en', 'fr', 'es')."
         ),
         exaggeration: float = Field(
             default=0.5,
@@ -92,22 +84,13 @@ def create_mcp_server() -> FastMCP:
         """Generate speech from text using SolSpeak TTS."""
         return await asyncio.to_thread(
             tts.generate_tts, text, model, voice_name, voice_audio_base64,
-            language, exaggeration, cfg_weight
+            exaggeration, cfg_weight
         )
-
-    @mcp.tool
-    async def batch_text_to_speech(
-        items: List[dict] = Field(
-            description="List of TTS items. Each: {text, voice_name, exaggeration, cfg_weight}"
-        )
-    ) -> dict:
-        """Generate multiple TTS clips in batch."""
-        return await asyncio.to_thread(tts.generate_batch, items)
 
     @mcp.tool
     async def generate_conversation(
         items: List[dict] = Field(
-            description="List of dialogue items. Each: {text, voice_name, exaggeration, cfg_weight}"
+            description="List of dialogue items. Each: {text, voice_name, model, exaggeration, cfg_weight}. Model can be 'standard' or 'turbo'."
         ),
         output_name: Optional[str] = Field(
             default=None,
@@ -150,7 +133,7 @@ def create_mcp_server() -> FastMCP:
     async def clone_voice_from_youtube(
         name: str = Field(description="Name for the voice (e.g., 'kobe')"),
         youtube_url: str = Field(description="YouTube video URL"),
-        timestamp: str = Field(description="Start timestamp (MM:SS or HH:MM:SS)"),
+        timestamp: str = Field(default="0:00", description="Start timestamp (MM:SS or HH:MM:SS)"),
         duration: int = Field(default=15, description="Duration in seconds (10-15 recommended)")
     ) -> dict:
         """Clone a voice directly from a YouTube video."""
