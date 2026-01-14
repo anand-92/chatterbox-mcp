@@ -3,7 +3,7 @@
 import asyncio
 from typing import List, Literal, Optional
 
-from fastmcp import FastMCP
+from fastmcp import Context, FastMCP
 from fastmcp.utilities.types import Audio
 from pydantic import Field
 
@@ -79,13 +79,23 @@ def create_mcp_server() -> FastMCP:
         cfg_weight: float = Field(
             default=0.5,
             description="CFG weight (0.0-1.0). Lower = slower, more deliberate speech."
-        )
+        ),
+        ctx: Context = None
     ) -> Audio:
-        """Generate speech from text using SolSpeak TTS."""
-        return await asyncio.to_thread(
+        """Generate speech from text using SolSpeak TTS. Returns audio directly."""
+        loop = asyncio.get_running_loop()
+
+        def progress_callback(current: int, total: int) -> None:
+            if ctx:
+                asyncio.run_coroutine_threadsafe(
+                    ctx.report_progress(progress=current, total=total), loop
+                )
+
+        audio_bytes = await asyncio.to_thread(
             tts.generate_tts, text, model, voice_name, voice_audio_base64,
-            exaggeration, cfg_weight
+            exaggeration, cfg_weight, progress_callback, True
         )
+        return Audio(data=audio_bytes, format="wav")
 
     @mcp.tool
     async def generate_conversation(

@@ -1,11 +1,14 @@
 """REST API endpoints with Swagger documentation."""
 
 import asyncio
-from typing import List, Literal, Optional
+import base64
+import json
+from typing import AsyncGenerator, List, Literal, Optional
 
-from fastapi import APIRouter, FastAPI, File, HTTPException, Path, UploadFile
+from fastapi import APIRouter, FastAPI, HTTPException, Path
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from starlette.responses import StreamingResponse
 
 from . import tts, voices
 from .config import config
@@ -111,6 +114,21 @@ class YouTubeCloneRequest(BaseModel):
     duration: int = Field(default=15, ge=5, le=30, description="Duration in seconds (10-15 recommended)")
 
 
+class TTSStreamRequest(BaseModel):
+    """Request body for streaming TTS."""
+    text: str = Field(..., description="The text to convert to speech")
+    model: Literal["standard", "turbo"] = Field(
+        default="standard",
+        description="Model: 'standard' or 'turbo'"
+    )
+    voice_name: Optional[str] = Field(
+        default=None,
+        description="Name of a saved voice to clone"
+    )
+    exaggeration: float = Field(default=0.5, ge=0.0, le=1.0)
+    cfg_weight: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
 class HealthResponse(BaseModel):
     """Health check response."""
     status: str
@@ -195,6 +213,97 @@ async def api_text_to_speech(request: TTSRequest):
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/tts/stream",
+    summary="Text to Speech (Streaming)",
+    description="""
+Stream audio chunks as they're generated via Server-Sent Events (SSE).
+
+Each chunk is sent as an SSE event with base64-encoded WAV audio.
+Client receives audio progressively instead of waiting for full generation.
+
+**Event format:**
+```
+event: chunk
+data: {"index": 0, "total": 3, "audio_base64": "UklGRi..."}
+
+event: chunk
+data: {"index": 1, "total": 3, "audio_base64": "UklGRi..."}
+
+event: done
+data: {"total_chunks": 3}
+```
+
+**Example client (JavaScript):**
+```javascript
+const eventSource = new EventSource('/api/tts/stream', {method: 'POST', body: JSON.stringify({text: "..."})});
+eventSource.addEventListener('chunk', (e) => {
+    const data = JSON.parse(e.data);
+    playAudioChunk(atob(data.audio_base64));
+});
+```
+"""
+)
+async def api_text_to_speech_stream(request: TTSStreamRequest):
+    """Stream TTS audio chunks via SSE."""
+    event_queue: asyncio.Queue = asyncio.Queue()
+
+    def run_generator_sync(queue_put) -> None:
+        """Run the sync generator and push events via callback."""
+        try:
+            for chunk_data in tts.generate_tts_streaming(
+                text=request.text,
+                model=request.model,
+                voice_name=request.voice_name,
+                exaggeration=request.exaggeration,
+                cfg_weight=request.cfg_weight
+            ):
+                queue_put(("chunk", chunk_data))
+            queue_put(("done", None))
+        except Exception as e:
+            queue_put(("error", str(e)))
+
+    async def generate_sse() -> AsyncGenerator[str, None]:
+        loop = asyncio.get_running_loop()
+
+        def queue_put_threadsafe(item):
+            loop.call_soon_threadsafe(event_queue.put_nowait, item)
+
+        loop.run_in_executor(None, run_generator_sync, queue_put_threadsafe)
+        total_chunks = 0
+
+        while True:
+            event_type, data = await event_queue.get()
+
+            if event_type == "chunk":
+                chunk_index, num_chunks, audio_bytes = data
+                total_chunks = num_chunks
+                payload = json.dumps({
+                    "index": chunk_index,
+                    "total": num_chunks,
+                    "audio_base64": base64.b64encode(audio_bytes).decode('utf-8')
+                })
+                yield f"event: chunk\ndata: {payload}\n\n"
+
+            elif event_type == "done":
+                yield f"event: done\ndata: {json.dumps({'total_chunks': total_chunks})}\n\n"
+                break
+
+            elif event_type == "error":
+                yield f"event: error\ndata: {json.dumps({'error': data})}\n\n"
+                break
+
+    return StreamingResponse(
+        generate_sse(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
 
 
 @router.post(

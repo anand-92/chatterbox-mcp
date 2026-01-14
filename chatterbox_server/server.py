@@ -8,6 +8,7 @@ from starlette.staticfiles import StaticFiles
 from .api import create_api_app
 from .config import config
 from .mcp_tools import create_mcp_server
+from .models import get_model
 from .tts import cleanup_old_outputs
 
 
@@ -36,7 +37,7 @@ def create_app():
     from starlette.applications import Starlette
 
     mcp = create_mcp_server()
-    mcp_http_app = mcp.http_app()
+    mcp_http_app = mcp.http_app(stateless_http=True)
 
     # Create FastAPI app with Swagger docs
     api_app = create_api_app()
@@ -99,10 +100,19 @@ def print_startup_info():
     print("=" * 60)
 
 
+def prewarm_models():
+    """Pre-warm models on startup so first request isn't slow."""
+    print("Pre-warming models...")
+    get_model("standard")
+    get_model("turbo")
+    print("Models pre-warmed!")
+
+
 def main():
     """Run the server."""
     print_startup_info()
     cleanup_old_outputs()  # Clean up old files on startup
+    prewarm_models()  # Load models before accepting requests
     app = create_app()
     uvicorn.run(app, host=config.HOST, port=config.PORT, ws="wsproto")
 
