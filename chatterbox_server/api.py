@@ -22,9 +22,9 @@ from .models import get_status
 class TTSRequest(BaseModel):
     """Request body for text-to-speech generation."""
     text: str = Field(..., description="The text to convert to speech")
-    model: Literal["standard", "turbo"] = Field(
+    model: Literal["standard", "turbo", "f5", "fish"] = Field(
         default="standard",
-        description="Model: 'standard' (default) or 'turbo' (fast, requires voice)"
+        description="Model: 'standard' (default), 'turbo' (fast, requires voice), 'f5' (F5-TTS), or 'fish' (Fish Speech, multilingual)"
     )
     voice_name: Optional[str] = Field(
         default=None,
@@ -38,13 +38,42 @@ class TTSRequest(BaseModel):
         default=0.5,
         ge=0.0,
         le=1.0,
-        description="Exaggeration level (0.0-1.0). Higher = more expressive"
+        description="Exaggeration level (0.0-1.0). Higher = more expressive (standard/turbo only)"
     )
     cfg_weight: float = Field(
         default=0.5,
         ge=0.0,
         le=1.0,
-        description="CFG weight (0.0-1.0). Lower = slower, more deliberate speech"
+        description="CFG weight (0.0-1.0). Lower = slower, more deliberate speech (standard/turbo only)"
+    )
+    voice_text: Optional[str] = Field(
+        default=None,
+        description="Transcription of the reference audio. REQUIRED for fish model voice cloning."
+    )
+    speed: float = Field(
+        default=1.0,
+        ge=0.5,
+        le=2.0,
+        description="Speech speed (0.5-2.0). Only for F5-TTS model."
+    )
+    # Fish Speech specific parameters
+    temperature: float = Field(
+        default=0.7,
+        ge=0.1,
+        le=1.0,
+        description="Sampling temperature (0.1-1.0). Higher = more varied. (fish only)"
+    )
+    top_p: float = Field(
+        default=0.8,
+        ge=0.1,
+        le=1.0,
+        description="Top-p sampling (0.1-1.0). (fish only)"
+    )
+    repetition_penalty: float = Field(
+        default=1.1,
+        ge=0.9,
+        le=2.0,
+        description="Repetition penalty (0.9-2.0). (fish only)"
     )
 
 
@@ -61,9 +90,14 @@ class ConversationItem(BaseModel):
     """Single item in a conversation."""
     text: str = Field(..., description="The text for this speaker")
     voice_name: Optional[str] = Field(default=None, description="Voice to use")
-    model: Literal["standard", "turbo"] = Field(default="standard", description="Model to use")
+    model: Literal["standard", "turbo", "fish"] = Field(default="standard", description="Model to use")
     exaggeration: float = Field(default=0.5, ge=0.0, le=1.0)
     cfg_weight: float = Field(default=0.5, ge=0.0, le=1.0)
+    # Fish Speech specific
+    voice_text: Optional[str] = Field(default=None, description="Transcription for fish voice cloning")
+    temperature: float = Field(default=0.7, ge=0.1, le=1.0)
+    top_p: float = Field(default=0.8, ge=0.1, le=1.0)
+    repetition_penalty: float = Field(default=1.1, ge=0.9, le=2.0)
 
 
 class ConversationRequest(BaseModel):
@@ -112,14 +146,24 @@ class YouTubeCloneRequest(BaseModel):
     youtube_url: str = Field(..., description="YouTube video URL")
     timestamp: str = Field(default="0:00", description="Start timestamp (MM:SS or HH:MM:SS)")
     duration: int = Field(default=15, ge=5, le=30, description="Duration in seconds (10-15 recommended)")
+    transcript: Optional[str] = Field(
+        default=None,
+        description="Transcript of the audio clip. Required for Fish model voice cloning. Saved for future use."
+    )
+
+
+class VoiceTranscriptRequest(BaseModel):
+    """Request body for setting a voice transcript."""
+    voice_name: str = Field(..., description="Name of the voice")
+    transcript: str = Field(..., description="Transcript of the reference audio")
 
 
 class TTSStreamRequest(BaseModel):
     """Request body for streaming TTS."""
     text: str = Field(..., description="The text to convert to speech")
-    model: Literal["standard", "turbo"] = Field(
+    model: Literal["standard", "turbo", "fish"] = Field(
         default="standard",
-        description="Model: 'standard' or 'turbo'"
+        description="Model: 'standard', 'turbo', or 'fish'"
     )
     voice_name: Optional[str] = Field(
         default=None,
@@ -127,6 +171,11 @@ class TTSStreamRequest(BaseModel):
     )
     exaggeration: float = Field(default=0.5, ge=0.0, le=1.0)
     cfg_weight: float = Field(default=0.5, ge=0.0, le=1.0)
+    # Fish Speech specific
+    voice_text: Optional[str] = Field(default=None, description="Transcription for fish voice cloning")
+    temperature: float = Field(default=0.7, ge=0.1, le=1.0)
+    top_p: float = Field(default=0.8, ge=0.1, le=1.0)
+    repetition_penalty: float = Field(default=1.1, ge=0.9, le=2.0)
 
 
 class HealthResponse(BaseModel):
@@ -191,11 +240,13 @@ Generate speech from text using SolSpeak TTS.
 **Models:**
 - `standard` - English, best quality, supports voice cloning
 - `turbo` - Faster, requires voice_name, supports paralinguistic tags: [laugh], [chuckle], [sigh], [cough], [gasp], [groan], [yawn], [clearing throat]
+- `fish` - Fish Speech (OpenAudio S1), multilingual, 45+ emotional markers like (angry), (excited), (laughing)
 
 **Tips:**
-- Higher exaggeration = more expressive speech
-- Lower cfg_weight = slower, more deliberate pacing
-- For dramatic speech: exaggeration=0.7, cfg_weight=0.3
+- Higher exaggeration = more expressive speech (standard/turbo)
+- Lower cfg_weight = slower, more deliberate pacing (standard/turbo)
+- For fish model: use emotional markers like (excited), (sad), (laughing) in text
+- Fish voice cloning requires both voice_name and voice_text (transcription)
 """
 )
 async def api_text_to_speech(request: TTSRequest):
@@ -208,7 +259,11 @@ async def api_text_to_speech(request: TTSRequest):
             voice_name=request.voice_name,
             voice_audio_base64=request.voice_audio_base64,
             exaggeration=request.exaggeration,
-            cfg_weight=request.cfg_weight
+            cfg_weight=request.cfg_weight,
+            voice_text=request.voice_text,
+            temperature=request.temperature,
+            top_p=request.top_p,
+            repetition_penalty=request.repetition_penalty,
         )
         return result
     except Exception as e:
@@ -258,7 +313,11 @@ async def api_text_to_speech_stream(request: TTSStreamRequest):
                 model=request.model,
                 voice_name=request.voice_name,
                 exaggeration=request.exaggeration,
-                cfg_weight=request.cfg_weight
+                cfg_weight=request.cfg_weight,
+                voice_text=request.voice_text,
+                temperature=request.temperature,
+                top_p=request.top_p,
+                repetition_penalty=request.repetition_penalty,
             ):
                 queue_put(("chunk", chunk_data))
             queue_put(("done", None))
@@ -397,13 +456,16 @@ Clone a voice directly from a YouTube video.
 
 Downloads the audio, extracts a clip at the specified timestamp, and saves it as a voice.
 
+**Tip:** Include `transcript` for Fish model voice cloning - it will be saved for future use!
+
 **Example:**
 ```json
 {
   "name": "celebrity",
   "youtube_url": "https://youtube.com/watch?v=xxx",
   "timestamp": "5:10",
-  "duration": 15
+  "duration": 15,
+  "transcript": "What the person is saying in the clip"
 }
 ```
 """
@@ -416,11 +478,55 @@ async def api_clone_voice_from_youtube(request: YouTubeCloneRequest):
             name=request.name,
             youtube_url=request.youtube_url,
             timestamp=request.timestamp,
-            duration=request.duration
+            duration=request.duration,
+            transcript=request.transcript
         )
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/voices/transcript",
+    summary="Set Voice Transcript",
+    description="""
+Set or update the transcript for an existing voice.
+
+The transcript is used for Fish model voice cloning and is automatically loaded when using the voice.
+
+**Example:**
+```json
+{
+  "voice_name": "eminem",
+  "transcript": "dj, writer, a producer, does something..."
+}
+```
+"""
+)
+async def api_set_voice_transcript(request: VoiceTranscriptRequest):
+    """Set transcript for a voice."""
+    try:
+        result = await asyncio.to_thread(
+            voices.set_voice_transcript,
+            voice_name=request.voice_name,
+            transcript=request.transcript
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/voices/{voice_name}/transcript",
+    summary="Get Voice Transcript",
+    description="Get the saved transcript for a voice"
+)
+async def api_get_voice_transcript(voice_name: str):
+    """Get transcript for a voice."""
+    transcript = voices.get_voice_transcript(voice_name)
+    if transcript:
+        return {"voice_name": voice_name, "transcript": transcript}
+    raise HTTPException(status_code=404, detail=f"No transcript found for voice '{voice_name}'")
 
 
 # ============================================================================
@@ -438,7 +544,7 @@ Generate high-quality speech from text using SolSpeak TTS.
 
 ### Features
 - **Voice Cloning**: Clone any voice from a 10-15 second audio sample
-- **Multiple Models**: Standard (best quality), Turbo (fast + paralinguistic tags)
+- **Multiple Models**: Standard (best quality), Turbo (fast + paralinguistic tags), Fish (multilingual + emotions)
 - **Conversations**: Generate multi-speaker dialogues as single audio files
 - **YouTube Cloning**: Extract voice samples directly from YouTube videos
 
@@ -447,8 +553,19 @@ Generate high-quality speech from text using SolSpeak TTS.
 2. Generate speech: `POST /api/tts` with text and voice_name
 3. Download audio from the returned `download_url`
 
-### Paralinguistic Tags (Turbo model only)
-Embed these tags in text for expressive speech:
+### Models
+- **standard**: English, best quality, voice cloning with exaggeration/cfg_weight
+- **turbo**: Fast, requires voice, supports paralinguistic tags like [laugh], [sigh]
+- **fish**: Fish Speech (OpenAudio S1), multilingual (13 languages), 45+ emotional markers
+
+### Emotional Markers (Fish model)
+Embed these markers in parentheses for expressive speech:
+`(angry)`, `(sad)`, `(excited)`, `(laughing)`, `(crying)`, `(whispering)`, `(shouting)`, etc.
+
+Example: `"(excited) This is amazing! (laughing) I can't believe it!"`
+
+### Paralinguistic Tags (Turbo model)
+Embed these tags in brackets for expressive speech:
 `[laugh]`, `[chuckle]`, `[sigh]`, `[cough]`, `[gasp]`, `[groan]`, `[yawn]`, `[clearing throat]`
 
 Example: `"That's hilarious! [laugh] I can't believe it."`

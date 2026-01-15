@@ -1,5 +1,6 @@
 """Voice management functions."""
 
+import json
 import os
 import shutil
 import subprocess
@@ -11,21 +12,103 @@ from typing import Optional
 from .config import config
 
 
+# ============================================================================
+# Voice Transcript Management
+# ============================================================================
+
+def _get_transcripts_file() -> Path:
+    """Get path to the voice transcripts JSON file."""
+    return config.VOICES_DIR / "voice_transcripts.json"
+
+
+def _load_transcripts() -> dict:
+    """Load voice transcripts from disk."""
+    transcripts_file = _get_transcripts_file()
+    if transcripts_file.exists():
+        try:
+            with open(transcripts_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            return {}
+    return {}
+
+
+def _save_transcripts(transcripts: dict) -> None:
+    """Save voice transcripts to disk."""
+    transcripts_file = _get_transcripts_file()
+    with open(transcripts_file, "w", encoding="utf-8") as f:
+        json.dump(transcripts, f, indent=2, ensure_ascii=False)
+
+
+def get_voice_transcript(voice_name: str) -> Optional[str]:
+    """Get the transcript for a voice."""
+    transcripts = _load_transcripts()
+    return transcripts.get(voice_name)
+
+
+def set_voice_transcript(voice_name: str, transcript: str) -> dict:
+    """Set or update the transcript for a voice."""
+    # Check if voice exists
+    voice_file = config.VOICES_DIR / f"{voice_name}.wav"
+    if not voice_file.exists():
+        available = [f.stem for f in config.VOICES_DIR.glob("*.wav")]
+        raise ValueError(f"Voice '{voice_name}' not found. Available: {available}")
+
+    transcripts = _load_transcripts()
+    transcripts[voice_name] = transcript
+    _save_transcripts(transcripts)
+
+    return {
+        "status": "success",
+        "voice_name": voice_name,
+        "transcript": transcript,
+        "message": f"Transcript saved for voice '{voice_name}'"
+    }
+
+
+def delete_voice_transcript(voice_name: str) -> dict:
+    """Delete the transcript for a voice."""
+    transcripts = _load_transcripts()
+    if voice_name in transcripts:
+        del transcripts[voice_name]
+        _save_transcripts(transcripts)
+        return {
+            "status": "success",
+            "voice_name": voice_name,
+            "message": f"Transcript deleted for voice '{voice_name}'"
+        }
+    return {
+        "status": "not_found",
+        "voice_name": voice_name,
+        "message": f"No transcript found for voice '{voice_name}'"
+    }
+
+
+# ============================================================================
+# Voice Management
+# ============================================================================
+
+
 def list_voices() -> dict:
     """List all saved voices available for voice cloning."""
+    transcripts = _load_transcripts()
     voices = {}
     for voice_file in config.VOICES_DIR.glob("*.wav"):
+        voice_name = voice_file.stem
         stat = voice_file.stat()
-        voices[voice_file.stem] = {
+        voices[voice_name] = {
             "filename": voice_file.name,
             "size_bytes": stat.st_size,
             "size_mb": round(stat.st_size / (1024 * 1024), 2),
+            "has_transcript": voice_name in transcripts,
+            "transcript": transcripts.get(voice_name),
         }
     return {
         "voices_directory": str(config.VOICES_DIR),
         "available_voices": voices,
         "count": len(voices),
-        "usage": "Use voice_name parameter in text_to_speech"
+        "voices_with_transcripts": sum(1 for v in voices.values() if v["has_transcript"]),
+        "usage": "Use voice_name parameter in text_to_speech. For fish model, transcript is auto-loaded if saved."
     }
 
 
@@ -78,7 +161,8 @@ def clone_voice_from_youtube(
     name: str,
     youtube_url: str,
     timestamp: str,
-    duration: int = 15
+    duration: int = 15,
+    transcript: Optional[str] = None
 ) -> dict:
     """Clone a voice directly from a YouTube video."""
     # Check for required tools
@@ -159,6 +243,18 @@ def clone_voice_from_youtube(
         stat = output_path.stat()
         print(f"Voice '{safe_name}' created: {stat.st_size} bytes")
 
+        # Save transcript if provided
+        if transcript:
+            set_voice_transcript(safe_name, transcript)
+            print(f"Transcript saved for voice '{safe_name}'")
+
+        has_transcript = transcript is not None
+        usage = (
+            f"text_to_speech(text='Your text', model='fish', voice_name='{safe_name}')  # transcript auto-loaded"
+            if has_transcript
+            else f"text_to_speech(text='Your text', voice_name='{safe_name}')"
+        )
+
         return {
             "status": "success",
             "voice_name": safe_name,
@@ -166,7 +262,9 @@ def clone_voice_from_youtube(
             "size_bytes": stat.st_size,
             "timestamp": timestamp,
             "duration": duration,
-            "usage": f"text_to_speech(text='Your text', voice_name='{safe_name}')"
+            "has_transcript": has_transcript,
+            "transcript": transcript,
+            "usage": usage,
         }
 
     finally:

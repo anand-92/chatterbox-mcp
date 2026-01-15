@@ -7,18 +7,19 @@ FastMCP server for text-to-speech generation with voice cloning.
 ```
 chatterbox-mcp/
 ├── server.py              # Entry point (run this)
-├── chatterbox/            # Main package
+├── chatterbox_server/     # Main package
 │   ├── __init__.py
 │   ├── config.py          # Configuration (paths, ports, URLs)
 │   ├── models.py          # Model loading, caching, pool management
 │   ├── audio.py           # Audio processing utilities
 │   ├── tts.py             # Core TTS generation logic
-│   ├── voices.py          # Voice management (list, save, delete, youtube)
+│   ├── voices.py          # Voice management (list, save, delete, youtube, transcripts)
 │   ├── mcp_tools.py       # MCP tool definitions
 │   ├── api.py             # REST API endpoints
 │   └── server.py          # Server setup and startup
 ├── ui/                    # Web interface
-├── voices/                # Voice reference files
+├── voices/                # Voice reference files + voice_transcripts.json
+├── checkpoints/           # Fish Speech model checkpoint
 └── output/                # Generated audio files
 ```
 
@@ -29,12 +30,29 @@ chatterbox-mcp/
 
 ## Models
 
-- `standard` - English, CFG/exaggeration controls, 500M params
-- `turbo` - English, fast generation, paralinguistic tags, requires voice
+- `standard` - English, CFG/exaggeration controls, 500M params (Chatterbox)
+- `turbo` - English, fast generation, paralinguistic tags, requires voice (Chatterbox)
+- `f5` - F5-TTS with flow matching, high-quality voice cloning, requires voice AND voice_text
+- `fish` - Fish Speech (OpenAudio S1), multilingual (13 languages), 45+ emotional markers
+
+### Fish Speech Model
+
+Fish Speech supports 13 languages and emotional markers in parentheses:
+- `(angry)`, `(sad)`, `(excited)`, `(laughing)`, `(crying)`, `(whispering)`, `(shouting)`, etc.
+
+Example: `"(excited) This is amazing! (laughing) I can't believe it!"`
+
+**Voice cloning with fish requires a transcript** of the reference audio. Transcripts are:
+- Auto-loaded from `voices/voice_transcripts.json` if previously saved
+- Saved via `set_voice_transcript(voice_name, transcript)` MCP tool
+- Saved via `POST /api/voices/transcript` API endpoint
+- Optionally provided when cloning: `clone_voice_from_youtube(..., transcript="...")`
+
+**Streaming**: Fish supports streaming via `/api/tts/stream` (SSE). MCP returns complete audio only.
 
 ## Configuration
 
-Edit `chatterbox/config.py`:
+Edit `chatterbox_server/config.py`:
 ```python
 PORT = 8765
 PUBLIC_URL = "https://mcp.thethirdroom.xyz"  # or None for local
@@ -51,7 +69,7 @@ python server.py
 
 ### Adding MCP Tools
 
-In `chatterbox/mcp_tools.py`:
+In `chatterbox_server/mcp_tools.py`:
 ```python
 @mcp.tool
 async def new_tool(param: str = Field(description="...")) -> dict:
@@ -61,20 +79,17 @@ async def new_tool(param: str = Field(description="...")) -> dict:
 
 ### Adding REST API Endpoints
 
-In `chatterbox/api.py`:
+In `chatterbox_server/api.py`:
 ```python
-async def api_new_endpoint(request):
-    data = await request.json()
-    result = await asyncio.to_thread(implementation_func, **data)
-    return JSONResponse(result)
-
-# Add to get_api_routes():
-Route("/api/new", api_new_endpoint, methods=["POST"]),
+@router.post("/new", summary="New Endpoint")
+async def api_new_endpoint(request: NewRequest):
+    result = await asyncio.to_thread(implementation_func, **request.dict())
+    return result
 ```
 
 ### Adding Core Logic
 
-In `chatterbox/tts.py` or `chatterbox/voices.py`:
+In `chatterbox_server/tts.py` or `chatterbox_server/voices.py`:
 ```python
 def new_function(param: str) -> dict:
     """Synchronous implementation."""
@@ -92,15 +107,30 @@ def new_function(param: str) -> dict:
 ## Testing
 
 ```bash
-# Voice upload
+# Clone voice from YouTube (with transcript for fish support)
 curl -X POST "http://localhost:8765/api/voices/youtube" \
   -H "Content-Type: application/json" \
-  -d '{"name": "test", "youtube_url": "https://youtube.com/...", "timestamp": "1:30"}'
+  -d '{"name": "test", "youtube_url": "https://youtube.com/...", "timestamp": "1:30", "transcript": "what they say in the clip"}'
 
-# TTS
+# Set transcript for existing voice
+curl -X POST "http://localhost:8765/api/voices/transcript" \
+  -H "Content-Type: application/json" \
+  -d '{"voice_name": "test", "transcript": "the transcription text"}'
+
+# TTS with standard model
 curl -X POST "http://localhost:8765/api/tts" \
   -H "Content-Type: application/json" \
   -d '{"text": "Hello", "model": "standard"}'
+
+# TTS with fish model (transcript auto-loaded)
+curl -X POST "http://localhost:8765/api/tts" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "(excited) Hello!", "model": "fish", "voice_name": "test"}'
+
+# Streaming TTS (SSE)
+curl -X POST "http://localhost:8765/api/tts/stream" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello", "model": "fish", "voice_name": "test"}'
 
 # Download
 curl "http://localhost:8765/download/tts_123456.wav" -o out.wav
@@ -111,4 +141,10 @@ curl "http://localhost:8765/download/tts_123456.wav" -o out.wav
 - Python 3.10+, PyTorch with CUDA
 - fastmcp, scipy, numpy, uvicorn, starlette
 - chatterbox-tts (Resemble AI)
+- fish-speech (Fish Audio OpenAudio S1)
 - yt-dlp, ffmpeg (YouTube cloning)
+
+### Fish Speech Setup
+
+1. Accept license at: https://huggingface.co/fishaudio/openaudio-s1-mini
+2. Download model: `huggingface-cli download fishaudio/openaudio-s1-mini --local-dir checkpoints/openaudio-s1-mini`

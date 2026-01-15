@@ -105,6 +105,9 @@ def prewarm_models():
     print("Pre-warming models...")
     get_model("standard")
     get_model("turbo")
+    # F5-TTS is loaded on-demand (first use) to avoid memory pressure
+    # If you want to pre-warm it, uncomment the next line:
+    # get_model("f5")
     print("Models pre-warmed!")
 
 
