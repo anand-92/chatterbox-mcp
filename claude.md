@@ -32,21 +32,63 @@ chatterbox-mcp/
 
 - `standard` - English, CFG/exaggeration controls, 500M params (Chatterbox)
 - `turbo` - English, fast generation, paralinguistic tags, requires voice (Chatterbox)
-- `f5` - F5-TTS with flow matching, high-quality voice cloning, requires voice AND voice_text
 - `fish` - Fish Speech (OpenAudio S1), multilingual (13 languages), 45+ emotional markers
 
-### Fish Speech Model
+### Fish Speech Model (OpenAudio S1) - RECOMMENDED
 
-Fish Speech supports 13 languages and emotional markers in parentheses:
-- `(angry)`, `(sad)`, `(excited)`, `(laughing)`, `(crying)`, `(whispering)`, `(shouting)`, etc.
+**Languages**: English, Chinese, Japanese, Korean, French, German, Spanish, Arabic, Russian, Dutch, Italian, Polish, Portuguese
 
-Example: `"(excited) This is amazing! (laughing) I can't believe it!"`
+**Performance**: ~275 tokens/sec with torch.compile on RTX 5090
 
-**Voice cloning with fish requires a transcript** of the reference audio. Transcripts are:
+#### Emotion Markers (place at START of sentences)
+
+**Basic Emotions**:
+`(happy)`, `(sad)`, `(angry)`, `(excited)`, `(calm)`, `(nervous)`, `(confident)`, `(surprised)`, `(satisfied)`, `(delighted)`, `(scared)`, `(worried)`, `(upset)`, `(frustrated)`, `(depressed)`, `(proud)`, `(relaxed)`, `(grateful)`, `(curious)`, `(confused)`, `(joyful)`
+
+**Intense Emotions**:
+`(hysterical)`, `(furious)`, `(panicked)`, `(astonished)`, `(disdainful)`, `(scornful)`, `(sarcastic)`, `(sneering)`
+
+**Tone Modifiers**:
+- `(whispering)` - soft, secretive
+- `(soft tone)` - gentle, calm
+- `(shouting)` - loud, energetic
+- `(screaming)` - high intensity
+- `(in a hurry tone)` - rushed speech
+
+**Paralinguistic Effects**:
+`(laughing)`, `(chuckling)`, `(sobbing)`, `(crying loudly)`, `(sighing)`, `(groaning)`, `(panting)`, `(gasping)`, `(yawning)`
+
+**Audience Effects**:
+`(crowd laughing)`, `(background laughter)`, `(audience laughing)`
+
+**Manual Laughter**: Use "Ha, ha, ha" or "Hahaha" in text.
+
+#### Examples
+
+```python
+# Single emotion
+"(excited) We won the championship!"
+
+# Stacked markers
+"(happy)(laughing) That's hilarious! Ha ha ha!"
+
+# Changing emotions
+"(sad) I can't believe it. (angry) But I won't give up! (confident) I'll come back stronger."
+
+# Whispering
+"(whispering) Don't tell anyone, but I know the secret."
+
+# Intense
+"(furious)(shouting) How could you do this?!"
+```
+
+#### Voice Cloning
+
+**Requires a transcript** of the reference audio. Transcripts are:
 - Auto-loaded from `voices/voice_transcripts.json` if previously saved
 - Saved via `set_voice_transcript(voice_name, transcript)` MCP tool
 - Saved via `POST /api/voices/transcript` API endpoint
-- Optionally provided when cloning: `clone_voice_from_youtube(..., transcript="...")`
+- Provided when cloning: `clone_voice_from_youtube(..., transcript="exact words in clip")`
 
 **Streaming**: Fish supports streaming via `/api/tts/stream` (SSE). MCP returns complete audio only.
 

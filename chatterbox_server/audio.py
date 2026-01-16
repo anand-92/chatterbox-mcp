@@ -34,6 +34,48 @@ def split_text_into_chunks(text: str, max_chars: int = None) -> List[str]:
     if max_chars is None:
         max_chars = config.MAX_CHUNK_CHARS
 
+    return _split_text_impl(text, max_chars)
+
+
+def split_text_for_fish(text: str, max_chars: int = 1000) -> List[str]:
+    """
+    Split text into chunks for Fish Speech model.
+    Uses longer chunks (1000 chars) and splits on paragraph boundaries first.
+    This helps maintain voice consistency on long texts.
+    """
+    # First try to split on paragraph boundaries (double newlines)
+    paragraphs = re.split(r'\n\n+', text.strip())
+
+    chunks = []
+    current_chunk = ""
+
+    for para in paragraphs:
+        para = para.strip()
+        if not para:
+            continue
+
+        if len(current_chunk) + len(para) + 2 <= max_chars:
+            current_chunk = f"{current_chunk}\n\n{para}".strip() if current_chunk else para
+        else:
+            if current_chunk:
+                chunks.append(current_chunk)
+            # If paragraph itself is too long, split by sentences
+            if len(para) > max_chars:
+                sub_chunks = _split_text_impl(para, max_chars)
+                chunks.extend(sub_chunks[:-1])
+                current_chunk = sub_chunks[-1] if sub_chunks else ""
+            else:
+                current_chunk = para
+
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    return chunks if chunks else [text]
+
+
+def _split_text_impl(text: str, max_chars: int) -> List[str]:
+    """Internal implementation of text splitting by sentences."""
+
     sentence_pattern = r'(?<=[.!?])\s+'
     sentences = re.split(sentence_pattern, text.strip())
 

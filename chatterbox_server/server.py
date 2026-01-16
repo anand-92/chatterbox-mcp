@@ -103,11 +103,18 @@ def print_startup_info():
 def prewarm_models():
     """Pre-warm models on startup so first request isn't slow."""
     print("Pre-warming models...")
-    get_model("standard")
     get_model("turbo")
-    # F5-TTS is loaded on-demand (first use) to avoid memory pressure
-    # If you want to pre-warm it, uncomment the next line:
-    # get_model("f5")
+
+    # Pre-warm fish model and trigger torch.compile
+    print("Pre-warming Fish Speech model (this may take a minute for torch.compile)...")
+    try:
+        fish = get_model("fish")
+        # Do a dummy generation to trigger compilation
+        fish.generate("Hello.", max_new_tokens=50)
+        print("Fish Speech compiled and ready!")
+    except Exception as e:
+        print(f"Fish Speech pre-warm failed (will load on first use): {e}")
+
     print("Models pre-warmed!")
 
 

@@ -22,9 +22,9 @@ from .models import get_status
 class TTSRequest(BaseModel):
     """Request body for text-to-speech generation."""
     text: str = Field(..., description="The text to convert to speech")
-    model: Literal["standard", "turbo", "f5", "fish"] = Field(
+    model: Literal["standard", "turbo", "fish"] = Field(
         default="standard",
-        description="Model: 'standard' (default), 'turbo' (fast, requires voice), 'f5' (F5-TTS), or 'fish' (Fish Speech, multilingual)"
+        description="Model: 'standard' (default), 'turbo' (fast, requires voice), or 'fish' (Fish Speech, multilingual)"
     )
     voice_name: Optional[str] = Field(
         default=None,
@@ -49,12 +49,6 @@ class TTSRequest(BaseModel):
     voice_text: Optional[str] = Field(
         default=None,
         description="Transcription of the reference audio. REQUIRED for fish model voice cloning."
-    )
-    speed: float = Field(
-        default=1.0,
-        ge=0.5,
-        le=2.0,
-        description="Speech speed (0.5-2.0). Only for F5-TTS model."
     )
     # Fish Speech specific parameters
     temperature: float = Field(

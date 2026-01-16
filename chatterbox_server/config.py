@@ -87,11 +87,6 @@ class Config:
         # Output cleanup (hours, 0 = disabled)
         self.OUTPUT_MAX_AGE_HOURS = int(os.getenv("SOLSPEAK_OUTPUT_MAX_AGE_HOURS", "24"))
 
-        # F5-TTS settings
-        self.F5_TTS_MODEL = os.getenv("SOLSPEAK_F5_MODEL", "F5TTS_v1_Base")
-        self.F5_TTS_NFE_STEPS = int(os.getenv("SOLSPEAK_F5_NFE_STEPS", "32"))  # Quality vs speed
-        self.F5_TTS_CFG_STRENGTH = float(os.getenv("SOLSPEAK_F5_CFG_STRENGTH", "2.0"))
-
         # Fish Speech (OpenAudio S1) settings
         self.FISH_CHECKPOINT_DIR = Path(os.getenv(
             "SOLSPEAK_FISH_CHECKPOINT_DIR",
@@ -100,8 +95,9 @@ class Config:
         self.FISH_TEMPERATURE = float(os.getenv("SOLSPEAK_FISH_TEMPERATURE", "0.7"))
         self.FISH_TOP_P = float(os.getenv("SOLSPEAK_FISH_TOP_P", "0.8"))
         self.FISH_REPETITION_PENALTY = float(os.getenv("SOLSPEAK_FISH_REPETITION_PENALTY", "1.1"))
-        self.FISH_MAX_NEW_TOKENS = int(os.getenv("SOLSPEAK_FISH_MAX_NEW_TOKENS", "2048"))
-        self.FISH_COMPILE = os.getenv("SOLSPEAK_FISH_COMPILE", "false").lower() == "true"
+        self.FISH_MAX_NEW_TOKENS = int(os.getenv("SOLSPEAK_FISH_MAX_NEW_TOKENS", "50000"))
+        # torch.compile for faster Fish Speech inference (DLL patched)
+        self.FISH_COMPILE = os.getenv("SOLSPEAK_FISH_COMPILE", "true").lower() == "true"
 
         # Create directories
         self.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

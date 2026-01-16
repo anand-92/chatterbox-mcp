@@ -1,21 +1,71 @@
 """Model loading, caching, and pool management."""
 
 import os
+import glob
 import threading
 from collections import OrderedDict
 from queue import Queue
 from typing import Optional, Tuple
 
-import torch
-import numpy as np
-
+# Must import config and set env var BEFORE importing torch
 from .config import config
 
 
+def _find_msvc_compiler():
+    """Find MSVC cl.exe on Windows and set CC environment variable."""
+    if os.name != 'nt' or os.environ.get('CC'):
+        return  # Not Windows or CC already set
+
+    # Common Visual Studio installation paths
+    vs_paths = [
+        r"C:\Program Files\Microsoft Visual Studio\2022\*\VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe",
+        r"C:\Program Files (x86)\Microsoft Visual Studio\2022\*\VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe",
+        r"C:\Program Files\Microsoft Visual Studio\2019\*\VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe",
+    ]
+
+    for pattern in vs_paths:
+        matches = glob.glob(pattern)
+        if matches:
+            # Use the most recent version (last in sorted order)
+            cl_path = sorted(matches)[-1]
+            os.environ['CC'] = cl_path
+            print(f"Found MSVC compiler: {cl_path}")
+            return
+
+    print("No MSVC compiler found - torch.compile may not work")
+
+
+# Fix for Windows PyTorch 2.9 OverflowError with torch.compile
+# See: https://github.com/pytorch/pytorch/issues/166886
+# Must be set BEFORE importing torch
+if os.name == 'nt':
+    os.environ["TORCHINDUCTOR_CUDAGRAPHS"] = "0"
+
+# Try to find and configure MSVC compiler for torch.compile
+if config.FISH_COMPILE:
+    _find_msvc_compiler()
+else:
+    # Disable torch.compile if no C compiler available
+    os.environ.setdefault("TORCH_COMPILE_DISABLE", "1")
+
+import torch
+import numpy as np
+
+# Also disable via config after import (belt and suspenders)
+if os.name == 'nt':
+    import torch._inductor.config
+    torch._inductor.config.triton.cudagraphs = False
+
 # CUDA optimizations
 if torch.cuda.is_available():
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
+    # Use new TF32 API (PyTorch 2.9+)
+    if hasattr(torch.backends.cuda.matmul, 'fp32_precision'):
+        torch.backends.cuda.matmul.fp32_precision = 'tf32'
+        torch.backends.cudnn.conv.fp32_precision = 'tf32'
+    else:
+        # Fallback for older PyTorch
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
     torch.backends.cudnn.benchmark = True
     print(f"CUDA optimizations enabled for {torch.cuda.get_device_name(0)}")
 
@@ -111,6 +161,7 @@ class FishSpeechWrapper:
         repetition_penalty: float,
         max_new_tokens: int,
         streaming: bool,
+        reference_id: Optional[str] = None,
     ):
         """Build a ServeTTSRequest with the given parameters."""
         from fish_speech.utils.schema import ServeTTSRequest, ServeReferenceAudio
@@ -124,13 +175,21 @@ class FishSpeechWrapper:
             references=references,
             reference_id=None,
             max_new_tokens=max_new_tokens,
-            chunk_length=200,
+            chunk_length=300,  # Max recommended for long texts
             top_p=top_p,
             repetition_penalty=repetition_penalty,
             temperature=temperature,
             format="wav",
             streaming=streaming,
+            use_memory_cache="off",
         )
+
+    def _get_reference_id(self, reference_audio: Optional[bytes]) -> Optional[str]:
+        """Generate a stable reference ID for caching based on audio content."""
+        if not reference_audio:
+            return None
+        import hashlib
+        return hashlib.md5(reference_audio).hexdigest()[:16]
 
     def generate(
         self,
@@ -156,10 +215,12 @@ class FishSpeechWrapper:
         Returns:
             Audio tensor of shape (samples,)
         """
+        ref_id = self._get_reference_id(reference_audio)
         request = self._build_request(
             text, reference_audio, reference_text,
             temperature, top_p, repetition_penalty, max_new_tokens,
             streaming=False,
+            reference_id=ref_id,
         )
 
         final_audio = None
@@ -189,10 +250,12 @@ class FishSpeechWrapper:
         Yields:
             Tuple of (segment_index, audio_tensor) for each segment
         """
+        ref_id = self._get_reference_id(reference_audio)
         request = self._build_request(
             text, reference_audio, reference_text,
             temperature, top_p, repetition_penalty, max_new_tokens,
             streaming=True,
+            reference_id=ref_id,
         )
 
         segment_index = 0
@@ -214,6 +277,10 @@ _pool_lock = threading.Lock()
 # Voice conditionals cache with LRU eviction
 _voice_conds_cache: OrderedDict = OrderedDict()
 _voice_cache_lock = threading.Lock()
+
+# Fish Speech reference audio cache (voice_path -> bytes)
+_fish_reference_cache: OrderedDict = OrderedDict()
+_fish_cache_lock = threading.Lock()
 
 
 def get_model(model_type: str = "standard"):
@@ -241,13 +308,6 @@ def get_model(model_type: str = "standard"):
             from chatterbox.tts_turbo import ChatterboxTurboTTS
             model = ChatterboxTurboTTS.from_pretrained(device=device)
             _models[model_type] = _disable_watermarker(model)
-        elif model_type == "f5":
-            from f5_tts.api import F5TTS
-            model = F5TTS(
-                model=config.F5_TTS_MODEL,
-                device=device,
-            )
-            _models[model_type] = model  # F5-TTS doesn't have watermarker
         elif model_type == "fish":
             checkpoint_dir = str(config.FISH_CHECKPOINT_DIR)
             if not os.path.exists(checkpoint_dir):
@@ -329,6 +389,33 @@ def get_cached_conditionals(model, voice_path: str, exaggeration: float = 0.5):
     return conds
 
 
+def get_cached_fish_reference(voice_path: str) -> bytes:
+    """Get cached reference audio bytes for Fish Speech with LRU eviction."""
+    global _fish_reference_cache
+
+    mtime = os.path.getmtime(voice_path)
+    cache_key = (voice_path, mtime)
+
+    with _fish_cache_lock:
+        if cache_key in _fish_reference_cache:
+            _fish_reference_cache.move_to_end(cache_key)
+            return _fish_reference_cache[cache_key]
+
+    # Read file outside lock
+    with open(voice_path, "rb") as f:
+        audio_bytes = f.read()
+
+    with _fish_cache_lock:
+        _fish_reference_cache[cache_key] = audio_bytes
+        # Evict oldest if over limit
+        while len(_fish_reference_cache) > config.VOICE_CACHE_MAX_SIZE:
+            oldest = next(iter(_fish_reference_cache))
+            del _fish_reference_cache[oldest]
+        print(f"Cached fish reference: {voice_path} (cache size: {len(_fish_reference_cache)})")
+
+    return audio_bytes
+
+
 def get_status() -> dict:
     """Get server status for health check."""
     return {
@@ -338,4 +425,5 @@ def get_status() -> dict:
         "models_loaded": list(_models.keys()),
         "pool_initialized": _model_pool is not None,
         "voice_cache_size": len(_voice_conds_cache),
+        "fish_reference_cache_size": len(_fish_reference_cache),
     }

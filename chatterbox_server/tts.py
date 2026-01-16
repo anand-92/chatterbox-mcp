@@ -9,9 +9,9 @@ from typing import Callable, Generator, List, Optional, Tuple
 
 import torch
 
-from .audio import concatenate_audio_tensors, save_audio_to_bytes, split_text_into_chunks
+from .audio import concatenate_audio_tensors, save_audio_to_bytes, split_text_into_chunks, split_text_for_fish
 from .config import config
-from .models import get_cached_conditionals, get_model, get_model_pool
+from .models import get_cached_conditionals, get_cached_fish_reference, get_model, get_model_pool
 from .voices import get_voice_transcript
 
 
@@ -27,8 +27,8 @@ def _load_fish_voice_context(
     """
     reference_audio = None
     if audio_prompt_path:
-        with open(audio_prompt_path, "rb") as f:
-            reference_audio = f.read()
+        # Use cached reference to avoid re-reading disk
+        reference_audio = get_cached_fish_reference(audio_prompt_path)
 
     # Auto-load transcript if not provided
     if audio_prompt_path and not voice_text and voice_name:
@@ -50,7 +50,7 @@ def _load_fish_voice_context(
 def acquire_model(model_type: str):
     """Context manager to acquire and release a TTS model.
 
-    Uses the model pool for standard models, direct loading for turbo/f5/fish.
+    Uses the model pool for standard models, direct loading for turbo/fish.
     """
     use_pool = model_type == "standard"
     model_pool = get_model_pool() if use_pool else None
@@ -182,19 +182,38 @@ def generate_tts(
     try:
         with acquire_model(model) as tts_model:
             if model == "fish":
-                print(f"Generating with Fish Speech: {text[:50]}...")
-                wav = tts_model.generate(
-                    text=text,
-                    reference_audio=reference_audio,
-                    reference_text=voice_text,
-                    temperature=temperature,
-                    top_p=top_p,
-                    repetition_penalty=repetition_penalty,
-                    max_new_tokens=config.FISH_MAX_NEW_TOKENS,
-                )
-                final_wav = wav
-                if progress_callback:
-                    progress_callback(1, 1)
+                # Chunk long texts to maintain voice consistency
+                chunks = split_text_for_fish(text)
+                num_chunks = len(chunks)
+
+                if num_chunks > 1:
+                    print(f"Fish Speech: splitting into {num_chunks} chunks for voice consistency...")
+
+                audio_tensors = []
+                for i, chunk in enumerate(chunks):
+                    if num_chunks > 1:
+                        print(f"Generating chunk {i + 1}/{num_chunks}: {chunk[:50]}...")
+                    else:
+                        print(f"Generating with Fish Speech: {chunk[:50]}...")
+
+                    wav = tts_model.generate(
+                        text=chunk,
+                        reference_audio=reference_audio,
+                        reference_text=voice_text,
+                        temperature=temperature,
+                        top_p=top_p,
+                        repetition_penalty=repetition_penalty,
+                        max_new_tokens=config.FISH_MAX_NEW_TOKENS,
+                    )
+                    audio_tensors.append(wav)
+                    if progress_callback:
+                        progress_callback(i + 1, num_chunks)
+
+                if num_chunks > 1:
+                    print("Concatenating audio chunks...")
+                    final_wav = concatenate_audio_tensors(audio_tensors, tts_model.sr, silence_duration=0.2)
+                else:
+                    final_wav = audio_tensors[0]
             else:
                 # Standard/Turbo model generation
                 kwargs = build_generation_kwargs(model, tts_model, audio_prompt_path, exaggeration, cfg_weight)

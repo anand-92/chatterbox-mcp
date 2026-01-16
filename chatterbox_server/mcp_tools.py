@@ -4,7 +4,6 @@ import asyncio
 from typing import List, Literal, Optional
 
 from fastmcp import Context, FastMCP
-from fastmcp.utilities.types import Audio
 from pydantic import Field
 
 from . import tts, voices
@@ -13,12 +12,12 @@ from . import tts, voices
 MCP_INSTRUCTIONS = """
 # SolSpeak TTS Server
 
-Text-to-speech with voice cloning. Returns audio directly.
+Text-to-speech with voice cloning. Returns download URL.
 
 ## Quick Start
 
 ```python
-text_to_speech(text="Hello!", voice_name="david")
+text_to_speech(text="Hello!", voice_name="david", model="fish")
 ```
 
 ## Models
@@ -32,37 +31,80 @@ text_to_speech(text="Hello!", voice_name="david")
 ### turbo - Chatterbox Turbo
 - Faster generation, supports paralinguistic tags
 - **REQUIRES voice_name** (voice cloning mandatory)
-- Embed tags in text for expressiveness:
-  - `[laugh]`, `[chuckle]`, `[sigh]`, `[cough]`, `[gasp]`, `[groan]`, `[yawn]`, `[clearing throat]`
+- Embed tags in text: `[laugh]`, `[chuckle]`, `[sigh]`, `[cough]`, `[gasp]`, `[groan]`, `[yawn]`
 - Example: `text_to_speech(text="That's hilarious! [laugh]", model="turbo", voice_name="david")`
 
-### fish - Fish Speech (OpenAudio S1)
-- Multilingual (13 languages), expressive speech synthesis
-- Supports 45+ emotional markers: (angry), (sad), (excited), (laughing), etc.
-- **For voice cloning: REQUIRES voice_name AND voice_text** (transcription of reference)
-- **Transcripts are auto-loaded** if saved with `set_voice_transcript` or during cloning
+### fish - Fish Speech (OpenAudio S1) - RECOMMENDED
+- Multilingual: English, Chinese, Japanese, Korean, French, German, Spanish, Arabic, Russian, Dutch, Italian, Polish, Portuguese
+- 64+ emotional markers with fine-grained control
+- **For voice cloning: provide voice_name** (transcript auto-loads if saved)
 - Without voice reference: generates with random voice
-- Use `temperature` (0.1-1.0), `top_p` (0.1-1.0), `repetition_penalty` (0.9-2.0)
-- Example: `text_to_speech(text="(excited) This is amazing!", model="fish")`
-- Example with cloning: `text_to_speech(text="Hello", model="fish", voice_name="david")`  # transcript auto-loaded
+
+## Fish Speech Emotion Guide
+
+**Place markers at the START of sentences in parentheses.**
+
+### Basic Emotions
+`(happy)`, `(sad)`, `(angry)`, `(excited)`, `(calm)`, `(nervous)`, `(confident)`, `(surprised)`, `(satisfied)`, `(delighted)`, `(scared)`, `(worried)`, `(upset)`, `(frustrated)`, `(depressed)`, `(proud)`, `(relaxed)`, `(grateful)`, `(curious)`, `(confused)`, `(joyful)`
+
+### Intense Emotions
+`(hysterical)`, `(furious)`, `(panicked)`, `(astonished)`, `(disdainful)`, `(scornful)`, `(sarcastic)`, `(sneering)`
+
+### Tone Modifiers
+`(whispering)` - soft, secretive
+`(soft tone)` - gentle, calm
+`(shouting)` - loud, energetic
+`(screaming)` - high intensity
+`(in a hurry tone)` - rushed speech
+
+### Paralinguistic Effects
+`(laughing)`, `(chuckling)`, `(sobbing)`, `(crying loudly)`, `(sighing)`, `(groaning)`, `(panting)`, `(gasping)`, `(yawning)`
+
+### Audience Effects
+`(crowd laughing)`, `(background laughter)`, `(audience laughing)`
+
+### Manual Laughter
+Use "Ha, ha, ha" or "Hahaha" directly in text for natural laughter.
+
+## Fish Examples
+
+```python
+# Single emotion
+text_to_speech(text="(excited) We won the championship!", model="fish", voice_name="david")
+
+# Emotion + effect
+text_to_speech(text="(happy)(laughing) That joke was hilarious! Ha ha ha!", model="fish", voice_name="david")
+
+# Changing emotions mid-speech
+text_to_speech(text="(sad) I can't believe it's over. (angry) But I won't give up! (confident) I'll come back stronger.", model="fish", voice_name="david")
+
+# Whispering
+text_to_speech(text="(whispering) Don't tell anyone, but I know the secret.", model="fish", voice_name="david")
+
+# Intense delivery
+text_to_speech(text="(furious)(shouting) How could you do this to me?!", model="fish", voice_name="david")
+```
 
 ## Voice Cloning
 
 ```python
-# Clone with transcript for fish model (transcript persists)
-clone_voice_from_youtube(name="david", youtube_url="https://youtube.com/...", timestamp="1:30", transcript="What they said in the clip")
-text_to_speech(text="Hello", model="fish", voice_name="david")  # transcript auto-loaded!
+# Clone with transcript (required for fish voice cloning quality)
+clone_voice_from_youtube(name="david", youtube_url="https://youtube.com/...", timestamp="1:30", transcript="Exact words spoken in clip")
 
 # Set transcript for existing voice
-set_voice_transcript(voice_name="david", transcript="What they said in the clip")
+set_voice_transcript(voice_name="david", transcript="Exact words spoken in clip")
+
+# Use cloned voice
+text_to_speech(text="(excited) Hello world!", model="fish", voice_name="david")
 ```
 
 ## Tips
 
 - 10-15 seconds of clean speech works best for cloning
-- For turbo with paralinguistic tags, place tags after relevant text
-- Lower cfg_weight (0.3) + higher exaggeration (0.7) for dramatic speech
-- For fish: use emotional markers in parentheses for expressive speech
+- Place emotion markers at sentence START, not middle
+- Stack markers: `(sad)(whispering)` for combined effects
+- Use one primary emotion per sentence for best results
+- Transcript must match reference audio exactly for best voice cloning
 """
 
 
@@ -110,8 +152,8 @@ def create_mcp_server() -> FastMCP:
             description="Repetition penalty (0.9-2.0). (fish only)"
         ),
         ctx: Context = None
-    ) -> Audio:
-        """Generate speech from text using SolSpeak TTS. Returns audio directly."""
+    ) -> dict:
+        """Generate speech from text using SolSpeak TTS. Returns download URL."""
         loop = asyncio.get_running_loop()
 
         def progress_callback(current: int, total: int) -> None:
@@ -120,7 +162,7 @@ def create_mcp_server() -> FastMCP:
                     ctx.report_progress(progress=current, total=total), loop
                 )
 
-        audio_bytes = await asyncio.to_thread(
+        result = await asyncio.to_thread(
             tts.generate_tts,
             text=text,
             model=model,
@@ -129,13 +171,13 @@ def create_mcp_server() -> FastMCP:
             exaggeration=exaggeration,
             cfg_weight=cfg_weight,
             progress_callback=progress_callback,
-            return_bytes=True,
+            return_bytes=False,  # Save file and return URL
             voice_text=voice_text,
             temperature=temperature,
             top_p=top_p,
             repetition_penalty=repetition_penalty,
         )
-        return Audio(data=audio_bytes, format="wav")
+        return result
 
     @mcp.tool
     async def generate_conversation(
